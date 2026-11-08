@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Face Attendance - Sign in</title>
+    <link rel="stylesheet" href="/static/signin.css" />
+  </head>
+  <body>
+    <main class="kiosk" aria-labelledby="title">
+      <header class="kiosk-header">
+        <h1 id="title">Face Attendance</h1>
+        <p id="instruction" class="instruction">Look at the camera.</p>
+      </header>
+
+      <section class="camera-area" aria-label="Camera preview">
+        <div class="frame">
+          <video id="video" autoplay playsinline muted></video>
+          <div class="guide" aria-hidden="true"></div>
+          <p id="camera-placeholder" class="placeholder">Starting camera…</p>
+        </div>
+      </section>
+
+      <section id="status" class="status status-waiting" role="status" aria-live="polite" aria-atomic="true">
+        <p id="status-main" class="status-main">Waiting for a face</p>
+        <p id="status-sub" class="status-sub">Position your face inside the guide.</p>
+      </section>
+
+      <footer class="kiosk-footer">
+        <a id="manual-link" class="manual-link" href="#manual-help">Sign in manually</a>
+        <p id="manual-help" class="manual-help" hidden>
+          If you cannot be recognised or you decline face recognition, please sign in at reception.
+        </p>
+      </footer>
+    </main>
+
+    <canvas id="capture-canvas" hidden></canvas>
+    <script src="/static/signin.js"></script>
+  </body>
+</html>

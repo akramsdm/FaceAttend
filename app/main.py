@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app.db import init_db
 from app.recognition import GalleryCache, Recognizer
 from app.routers.auth import router as auth_router
+from app.routers.signin import router as signin_router
 from app.routers.staff import router as staff_router
 from app.security import SessionStore
 
@@ -26,11 +27,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Face Attendance System", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(staff_router)
+app.include_router(signin_router)
 app.mount(
     "/admin",
     StaticFiles(directory=ROOT / "static" / "admin", html=True),
     name="admin",
 )
+app.mount(
+    "/static",
+    StaticFiles(directory=ROOT / "static"),
+    name="static",
+)
+
 
 
 @app.get("/health")
