@@ -3,75 +3,147 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Face Attendance - Clock</title>
+    <title>FaceAttend - Mark Attendance</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/signin.css" />
   </head>
   <body>
-    <main class="kiosk" aria-labelledby="title">
-      <header class="kiosk-header">
-        <h1 id="title">Face Attendance</h1>
-        <p id="instruction" class="instruction">Look at the camera to identify yourself.</p>
+    <div class="app">
+      <header class="header" role="banner">
+        <div class="brand">
+          <span class="brand-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="10" r="3"/><path d="M7 19c1.5-2 3.2-3 5-3s3.5 1 5 3"/></svg>
+          </span>
+          <span class="brand-name">FaceAttend</span>
+        </div>
+        <div id="system-status" class="system-status is-loading" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="system-status-text">Starting camera</span>
+        </div>
       </header>
 
-      <section id="scan-screen" class="screen" aria-label="Camera scan">
-        <div class="camera-area">
-          <div class="frame">
-            <video id="video" autoplay playsinline muted></video>
-            <div class="guide" aria-hidden="true"></div>
-            <p id="camera-placeholder" class="placeholder">Starting camera…</p>
-          </div>
+      <section id="scan-view" class="view" aria-labelledby="page-title">
+        <div class="page-head">
+          <h1 id="page-title">Mark Your Attendance</h1>
+          <p class="page-sub">A quick face scan is all you need.</p>
         </div>
-        <section id="status" class="status status-waiting" role="status" aria-live="polite" aria-atomic="true">
-          <p id="status-main" class="status-main">Waiting for a face</p>
-          <p id="status-sub" class="status-sub">Position your face inside the guide.</p>
-        </section>
-      </section>
 
-      <section id="confirm-screen" class="screen" hidden aria-labelledby="confirm-name">
-        <div class="panel">
-          <p id="confirm-name" class="big-name"></p>
-          <p id="confirm-shift" class="meta"></p>
-          <p id="confirm-time" class="meta"></p>
-          <p id="confirm-message" class="meta" role="status" aria-live="polite"></p>
-          <p id="countdown" class="countdown" aria-live="polite"></p>
-          <div class="actions">
-            <button id="btn-in" type="button" class="action-btn in">Clock in</button>
-            <button id="btn-out" type="button" class="action-btn out">Clock out</button>
-          </div>
-          <p id="btn-reason" class="meta small"></p>
-          <div id="early-confirm" class="confirm-box" hidden>
-            <p>Your shift has not ended yet. Clock out early?</p>
-            <div class="actions">
-              <button id="early-yes" type="button" class="action-btn out">Yes, clock out early</button>
-              <button id="early-no" type="button" class="action-btn secondary">Cancel</button>
+        <div class="scan-grid">
+          <aside class="side-card" aria-label="Scanning instructions">
+            <div class="info-block">
+              <span class="info-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c1.8-3.3 4.6-5 8-5s6.2 1.7 8 5"/><rect x="3" y="3" width="18" height="18" rx="4" stroke-dasharray="2 3"/></svg>
+              </span>
+              <div>
+                <h2>Position your face</h2>
+                <p>Look directly at the camera and stay within the guide.</p>
+              </div>
+            </div>
+            <div class="info-block">
+              <span class="info-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+              </span>
+              <div>
+                <h2>Good lighting</h2>
+                <p>Ensure your face is clearly visible.</p>
+              </div>
+            </div>
+          </aside>
+
+          <div class="camera-column">
+            <div class="camera-shell">
+              <div class="camera-frame">
+                <video id="video" autoplay playsinline muted></video>
+                <div id="face-guide" class="face-guide" aria-hidden="true"></div>
+                <div id="scan-line" class="scan-line" aria-hidden="true"></div>
+                <div id="camera-overlay" class="camera-overlay" hidden>
+                  <div id="overlay-spinner" class="spinner" hidden aria-hidden="true"></div>
+                  <p id="overlay-main"></p>
+                  <p id="overlay-sub"></p>
+                </div>
+              </div>
+            </div>
+            <div id="feedback" class="feedback tone-neutral" role="status" aria-live="polite" aria-atomic="true">
+              <span class="feedback-dot" aria-hidden="true"></span>
+              <span id="feedback-text">Waiting for your face</span>
             </div>
           </div>
-          <div id="blocked-box" class="confirm-box" hidden>
-            <button id="btn-request" type="button" class="action-btn secondary">Request approval</button>
-            <p class="meta small">If you need help, please contact reception.</p>
-          </div>
-          <p id="confirm-error" class="meta error" role="alert"></p>
+
+          <aside class="side-card" aria-label="Privacy and assistance">
+            <div class="info-block">
+              <span class="info-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.4 8.4-7 10-3.6-1.6-7-5-7-10V6l7-3z"/><path d="m9 12 2 2 4-4"/></svg>
+              </span>
+              <div>
+                <h2>Your privacy matters</h2>
+                <p>Biometric information is used only for attendance verification.</p>
+              </div>
+            </div>
+            <div class="info-block">
+              <span class="info-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 1 1 5.1 2.2c-.8.8-1.7 1.3-1.7 2.8"/><circle cx="12" cy="17" r=".5" fill="currentColor"/></svg>
+              </span>
+              <div>
+                <h2>Need help?</h2>
+                <p>Manual attendance is available if recognition fails.</p>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <div class="manual-row">
+          <a id="manual-link" class="manual-link" href="#manual-help">Sign in manually</a>
+          <p id="manual-help" class="manual-help" hidden>
+            If you cannot be recognised or you decline face recognition, please sign in at reception.
+          </p>
         </div>
       </section>
 
-      <section id="result-screen" class="screen" hidden aria-live="polite">
-        <div class="panel">
-          <p id="result-main" class="big-name"></p>
-          <p id="result-sub" class="meta"></p>
-          <div class="actions">
-            <button id="btn-undo" type="button" class="action-btn secondary" hidden>Undo (<span id="undo-secs">10</span>s)</button>
-          </div>
-          <p id="result-note" class="meta small"></p>
+      <section id="dialog-view" class="view view-center" hidden aria-live="polite">
+        <div class="dialog-card" role="dialog" aria-modal="false" aria-labelledby="dialog-title">
+          <div id="dialog-icon" class="dialog-icon warn" aria-hidden="true"></div>
+          <h2 id="dialog-title" class="dialog-title"></h2>
+          <p id="dialog-desc" class="dialog-desc"></p>
+          <p id="dialog-extra" class="dialog-extra"></p>
+          <div id="dialog-actions" class="dialog-actions"></div>
+          <p id="dialog-error" class="dialog-error" role="alert"></p>
         </div>
       </section>
 
-      <footer class="kiosk-footer">
-        <a id="manual-link" class="manual-link" href="#manual-help">Sign in manually</a>
-        <p id="manual-help" class="manual-help" hidden>
-          If you cannot be recognised or you decline face recognition, please sign in at reception.
-        </p>
-      </footer>
-    </main>
+      <section id="success-view" class="view view-center" hidden aria-live="polite">
+        <div class="success-card">
+          <div id="success-indicator" class="success-indicator ok" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+          </div>
+          <h2 id="success-heading" class="success-heading">Attendance Verified</h2>
+          <p id="success-name" class="success-name"></p>
+          <p id="success-verify" class="success-verify">Your identity has been successfully verified.</p>
+
+          <div class="details-panel">
+            <div class="detail-row">
+              <span class="detail-label">Attendance action</span>
+              <span id="detail-action" class="detail-value"><span class="pill"></span></span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Recorded time</span>
+              <span id="detail-time" class="detail-value"></span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Assigned shift</span>
+              <span id="detail-shift" class="detail-value"></span>
+            </div>
+          </div>
+
+          <div id="final-message" class="final-message ok">You're all set. Have a productive day!</div>
+          <div class="undo-row">
+            <button id="btn-undo" type="button" class="undo-btn" hidden>Undo (<span id="undo-secs">10</span>s)</button>
+          </div>
+          <p id="result-note" class="result-note" role="status"></p>
+        </div>
+      </section>
+    </div>
 
     <canvas id="capture-canvas" hidden></canvas>
     <script src="/static/signin.js"></script>

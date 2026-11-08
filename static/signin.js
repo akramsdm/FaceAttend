@@ -1,344 +1,486 @@
 (function () {
   "use strict";
 
-  var INTERVAL_MS = 1500;
-  var RESULT_MS = 4000;
+  var SCAN_INTERVAL_MS = 1400;
+  var SUCCESS_RESET_MS = 4500;
   var UNDO_MS = 10000;
-  var TOKEN_MS = 20000;
+  var TOKEN_FALLBACK_MS = 20000;
+  var CHALLENGE_HOLD_MS = 900;
+  var FAIL_REDIRECT_AFTER = 3;
+  var FAIL_REDIRECT_MS = 5000;
   var KIOSK_ID = "entrance-main";
-  var CHALLENGE_DELAY_MS = 900;
-  var RECEPTION = "please contact reception";
 
-  var video = document.getElementById("video");
-  var canvas = document.getElementById("capture-canvas");
-  var placeholder = document.getElementById("camera-placeholder");
-  var statusEl = document.getElementById("status");
-  var mainEl = document.getElementById("status-main");
-  var subEl = document.getElementById("status-sub");
-  var scanScreen = document.getElementById("scan-screen");
-  var confirmScreen = document.getElementById("confirm-screen");
-  var resultScreen = document.getElementById("result-screen");
-  var confirmName = document.getElementById("confirm-name");
-  var confirmShift = document.getElementById("confirm-shift");
-  var confirmTime = document.getElementById("confirm-time");
-  var confirmMessage = document.getElementById("confirm-message");
-  var countdownEl = document.getElementById("countdown");
-  var btnIn = document.getElementById("btn-in");
-  var btnOut = document.getElementById("btn-out");
-  var btnReason = document.getElementById("btn-reason");
-  var earlyBox = document.getElementById("early-confirm");
-  var earlyYes = document.getElementById("early-yes");
-  var earlyNo = document.getElementById("early-no");
-  var blockedBox = document.getElementById("blocked-box");
-  var btnRequest = document.getElementById("btn-request");
-  var confirmError = document.getElementById("confirm-error");
-  var resultMain = document.getElementById("result-main");
-  var resultSub = document.getElementById("result-sub");
-  var btnUndo = document.getElementById("btn-undo");
-  var undoSecs = document.getElementById("undo-secs");
-  var resultNote = document.getElementById("result-note");
-  var manualLink = document.getElementById("manual-link");
-  var manualHelp = document.getElementById("manual-help");
+  var $ = function (id) { return document.getElementById(id); };
+  var systemStatus = $("system-status"), systemStatusText = $("system-status-text");
+  var scanView = $("scan-view"), dialogView = $("dialog-view"), successView = $("success-view");
+  var video = $("video"), canvas = $("capture-canvas"), faceGuide = $("face-guide"), scanLine = $("scan-line");
+  var cameraOverlay = $("camera-overlay"), overlaySpinner = $("overlay-spinner");
+  var overlayMain = $("overlay-main"), overlaySub = $("overlay-sub");
+  var feedback = $("feedback"), feedbackText = $("feedback-text");
+  var dialogIcon = $("dialog-icon"), dialogTitle = $("dialog-title"), dialogDesc = $("dialog-desc");
+  var dialogExtra = $("dialog-extra"), dialogActions = $("dialog-actions"), dialogError = $("dialog-error");
+  var successIndicator = $("success-indicator"), successHeading = $("success-heading");
+  var successName = $("success-name"), successVerify = $("success-verify");
+  var detailAction = $("detail-action"), detailTime = $("detail-time"), detailShift = $("detail-shift");
+  var finalMessage = $("final-message"), btnUndo = $("btn-undo"), undoSecs = $("undo-secs"), resultNote = $("result-note");
+  var manualLink = $("manual-link"), manualHelp = $("manual-help");
 
-  var stream = null, timerId = null, inFlight = false, showingResult = false;
-  var challengeDir = null, challengeFirst = null;
-  var current = null; // {token, name, shift_summary, allowed_actions, message, token_expires_in}
-  var countdownId = null, tokenDeadline = 0, lastEventId = null, lastToken = null;
-  var undoTimerId = null, undoDeadline = 0, resultResetId = null;
-  var lastAction = null, lastRequestReason = null;
+  var stream = null, scanTimer = null, inFlight = false, uiState = "initializing";
+  var challenge = null; // {dir, firstBlob, startedAt}
+  var session = null; // {token, name, shift_summary, message, allowed_actions, expiresAt}
+  var lastToken = null, lastEventId = null, lastAction = null, lastShift = null, lastName = null;
+  var failCount = 0, resetTimer = null, undoTimer = null;
 
-  function setStatus(kind, main, sub) {
-    statusEl.className = "status status-" + kind;
-    mainEl.textContent = main || "";
-    subEl.textContent = sub || "";
-  }
-  function fmtTime(d) {
-    try { return new Date(d || Date.now()).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}); }
-    catch(e){ return ""; }
-  }
-  function showScreen(which) {
-    scanScreen.hidden = which !== "scan";
-    confirmScreen.hidden = which !== "confirm";
-    resultScreen.hidden = which !== "result";
-  }
   function clearTimers() {
-    window.clearInterval(countdownId); countdownId = null;
-    window.clearInterval(undoTimerId); undoTimerId = null;
-    window.clearTimeout(resultResetId); resultResetId = null;
+    if (resetTimer) { clearTimeout(resetTimer); resetTimer = null; }
+    if (undoTimer) { clearInterval(undoTimer); undoTimer = null; }
   }
-  function stopScanning() { /* keep interval but gate on state */ }
-  function scanningAllowed() { return !!stream && !inFlight && !showingResult && !current; }
+  function nowMs() { return Date.now(); }
+  function fmtTime(d) {
+    var dt = d ? new Date(d) : new Date();
+    try { return dt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); }
+    catch (e) { return dt.toLocaleTimeString(); }
+  }
 
-  function resetAll() {
+  function setSystemStatus(kind, text) {
+    systemStatus.className = "system-status is-" + (kind || "loading");
+    systemStatusText.textContent = text || "";
+  }
+  function setFeedback(tone, text) {
+    feedback.className = "feedback tone-" + (tone || "neutral");
+    feedbackText.textContent = text || "";
+  }
+  function showView(which) {
+    scanView.hidden = which !== "scan";
+    dialogView.hidden = which !== "dialog";
+    successView.hidden = which !== "success";
+  }
+  function showOverlay(show, spinner, main, sub) {
+    cameraOverlay.hidden = !show;
+    overlaySpinner.hidden = !spinner;
+    overlayMain.textContent = main || "";
+    overlaySub.textContent = sub || "";
+  }
+  function svg(icon) {
+    if (icon === "warn") return '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2.5 20h19L12 3z"/><path d="M12 9v4"/><circle cx="12" cy="16.5" r=".7" fill="currentColor"/></svg>';
+    if (icon === "error") return '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15 9 9 15M9 9l6 6"/></svg>';
+    if (icon === "info") return '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 11h1v5h1"/></svg>';
+    if (icon === "ok") return '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+    return "";
+  }
+  function setDialog(kind, icon, title, desc, extra, actions) {
+    uiState = "dialog";
+    dialogIcon.className = "dialog-icon " + (kind || "info");
+    dialogIcon.innerHTML = svg(icon || "info");
+    dialogTitle.textContent = title || "";
+    dialogDesc.textContent = desc || "";
+    dialogExtra.textContent = extra || "";
+    dialogError.textContent = "";
+    dialogActions.innerHTML = "";
+    (actions || []).forEach(function (a) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn " + (a.cls || "btn-neutral");
+      b.textContent = a.label;
+      b.addEventListener("click", a.onClick);
+      dialogActions.appendChild(b);
+    });
+    showView("dialog");
+  }
+
+  function scanningEnabled() {
+    return !!stream && uiState === "scanning" && !inFlight;
+  }
+
+  function resetToScanning(msg) {
     clearTimers();
-    current = null; lastEventId = null; lastToken = null; lastAction = null; lastRequestReason = null;
-    challengeDir = null; challengeFirst = null; showingResult = false;
-    earlyBox.hidden = true; blockedBox.hidden = true; confirmError.textContent = "";
+    session = null; challenge = null; inFlight = false; uiState = "scanning";
     btnUndo.hidden = true; resultNote.textContent = "";
-    showScreen("scan");
-    setStatus("waiting", "Waiting for a face", "Position your face inside the guide.");
+    faceGuide.className = "face-guide waiting"; scanLine.className = "scan-line";
+    showOverlay(false);
+    showView("scan");
+    setSystemStatus("ok", "Camera ready");
+    if (msg && msg.text) setFeedback(msg.tone || "neutral", msg.text);
+    else setFeedback("neutral", "Position your face inside the guide.");
   }
 
-  function scheduleResultReset() {
-    window.clearTimeout(resultResetId);
-    resultResetId = window.setTimeout(resetAll, RESULT_MS);
+  function scheduleReset(ms) {
+    if (resetTimer) clearTimeout(resetTimer);
+    resetTimer = setTimeout(function () { resetToScanning(); }, ms || SUCCESS_RESET_MS);
   }
 
-  function humanMessage(code) {
-    var m = {
-      no_shift_request_approval: "No shift assigned for you today.",
-      before_window: "It is too early to clock in.",
-      window_open_not_clocked_in: "You can clock in now.",
-      late_arrival: "You are late; clocking in will be recorded as late.",
-      clock_out_early_confirm: "Your shift has not ended yet. Confirm if you want to clock out early.",
-      recorded: "You can clock out now."
-    };
-    return m[code] || "";
-  }
-
-  function reasonForRequest(code, action) {
-    if (code === "no_shift_request_approval") return "no_shift";
-    if (code === "before_window") return "out_of_window";
-    if (code === "clock_out_early_confirm") return "early_out";
-    return "out_of_window";
-  }
-
-  function updateCountdown() {
-    if (!current) return;
-    var left = Math.max(0, Math.ceil((tokenDeadline - Date.now()) / 1000));
-    countdownEl.textContent = "Time remaining: " + left + "s";
-    if (left <= 0) {
-      window.clearInterval(countdownId); countdownId = null;
-      setStatus("error", "Session expired", "The confirmation time ran out. Please scan again.");
-      resetAll();
-    }
-  }
-
-  function enterConfirm(payload) {
-    current = payload;
-    lastToken = payload.token;
-    tokenDeadline = Date.now() + ((payload.token_expires_in || 20) * 1000);
-    confirmName.textContent = payload.name || "Recognised";
-    confirmShift.textContent = payload.shift_summary ? ("Shift: " + payload.shift_summary) : "";
-    confirmTime.textContent = "Time: " + fmtTime(new Date());
-    var msg = humanMessage(payload.message);
-    confirmMessage.textContent = msg || "";
-    confirmError.textContent = "";
-    earlyBox.hidden = true; blockedBox.hidden = true;
-    var allowed = payload.allowed_actions || [];
-    btnIn.disabled = allowed.indexOf("in") === -1;
-    btnOut.disabled = allowed.indexOf("out") === -1;
-    var reasons = [];
-    if (btnIn.disabled && btnOut.disabled) reasons.push(msg || "No actions are available right now.");
-    else {
-      if (btnIn.disabled) reasons.push("Clock in is not available: " + (msg || "not allowed now."));
-      if (btnOut.disabled && allowed.indexOf("in") !== -1) reasons.push("Clock out is not available until you are clocked in.");
-    }
-    btnReason.textContent = reasons.join(" ");
-    if (btnIn.disabled && btnOut.disabled) {
-      blockedBox.hidden = false;
-      lastRequestReason = reasonForRequest(payload.message, "in");
-    }
-    showScreen("confirm");
-    updateCountdown();
-    countdownId = window.setInterval(updateCountdown, 250);
-  }
-
-  function handleScanPayload(payload) {
-    if (!payload) return;
-    var status = payload.status;
-    if (status === "challenge_required") {
-      challengeDir = payload.challenge === "left" ? "left" : "right";
-      setStatus("waiting", challengeDir === "left" ? "Turn your head LEFT" : "Turn your head RIGHT", "Hold briefly, then face forward.");
+  function startCamera() {
+    uiState = "initializing";
+    setSystemStatus("loading", "Starting camera");
+    setFeedback("neutral", "Starting camera...");
+    faceGuide.className = "face-guide waiting"; scanLine.className = "scan-line";
+    showView("scan");
+    showOverlay(true, true, "Starting camera...", "Please wait while we prepare the attendance system.");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showCameraUnavailable("Camera unavailable.", "Camera access is not available in this browser. Use a current browser on localhost or HTTPS, or use manual attendance.");
       return;
     }
-    if (status === "ok" && payload.token) {
-      enterConfirm(payload);
-      return;
-    }
-    if (showingResult || current) return;
-    var messages = {
-      no_face: ["No face detected", "Position your face inside the guide."],
-      multiple_faces: ["More than one face detected", "Only one person should face the camera."],
-      too_small: ["Face is too small", "Move closer to the camera."],
-      blurry: ["Image is blurry", "Hold still and face the camera."],
-      not_recognised: ["Not recognised", "Try again, or " + RECEPTION + "."],
-      ambiguous: ["Not recognised", "Try again, or " + RECEPTION + "."],
-      invalid_image: ["Could not read image", "Please try again."],
-      spoof: ["Liveness check failed", "Turn your head as asked, or " + RECEPTION + "."]
-    };
-    var msg = messages[status] || ["Not recognised", "Try again, or " + RECEPTION + "."];
-    setStatus("error", msg[0], msg[1]);
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
+      .then(function (media) {
+        stream = media; video.srcObject = media;
+        return video.play().catch(function () {});
+      })
+      .then(function () {
+        function waitForVideo() {
+          if (video.readyState >= 2 && !video.paused) { resetToScanning(); startScanning(); return; }
+          var tries = 0;
+          var iv = setInterval(function () {
+            tries += 1;
+            if (video.readyState >= 2 && !video.paused) { clearInterval(iv); resetToScanning(); startScanning(); }
+            else if (tries > 40) { clearInterval(iv); showCameraUnavailable("Camera unavailable.", "The camera started but video could not be displayed. Please reload or check the camera."); }
+          }, 100);
+        }
+        if (video.readyState >= 2) waitForVideo(); else video.addEventListener("loadeddata", waitForVideo, { once: true });
+      })
+      .catch(function (err) {
+        var msg = cameraErrorMessage(err);
+        if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) showCameraBlocked(msg);
+        else showCameraUnavailable("Camera unavailable.", msg);
+      });
+  }
+  function cameraErrorMessage(err) {
+    if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) return "Please allow camera permission in the browser, then reload this page.";
+    if (err && (err.name === "NotFoundError" || err.name === "DevicesNotFoundError")) return "No camera was found. Connect a camera and reload this page.";
+    if (err && (err.name === "NotReadableError" || err.name === "TrackStartError")) return "The camera is in use by another application. Close it and reload.";
+    return "Please check the camera connection or contact the administrator.";
+  }
+  function showCameraBlocked(detail) {
+    uiState = "error"; setSystemStatus("error", "Camera unavailable");
+    showOverlay(false); showView("scan");
+    setFeedback("tone-error", "Camera access is blocked.");
+    setDialog("error", "error", "Camera unavailable.", detail + " Manual attendance is still available below.", "", [
+      { label: "Try again", cls: "btn-primary", onClick: function () { startCamera(); } }
+    ]);
+  }
+  function showCameraUnavailable(title, detail) {
+    uiState = "error"; setSystemStatus("error", "Camera unavailable");
+    showOverlay(false); showView("scan"); setFeedback("warn", "Camera unavailable.");
+    setDialog("error", "error", title || "Camera unavailable.", detail || "Please check the camera connection or contact the administrator.", "", [
+      { label: "Try again", cls: "btn-primary", onClick: function () { startCamera(); } }
+    ]);
   }
 
-  function handleServiceError() {
-    if (showingResult || current) return;
-    setStatus("error", "Service unavailable", "The sign-in service is not available. Please " + RECEPTION + ".");
+  function startScanning() {
+    if (scanTimer) return;
+    scanTimer = setInterval(tickScan, SCAN_INTERVAL_MS);
   }
-
   function captureBlob() {
     if (!stream || !video.videoWidth || !video.videoHeight) return Promise.resolve(null);
     var width = Math.min(video.videoWidth, 640);
     var height = Math.round(video.videoHeight * (width / video.videoWidth));
     canvas.width = width; canvas.height = height;
     canvas.getContext("2d").drawImage(video, 0, 0, width, height);
-    return new Promise(function (resolve) { canvas.toBlob(function (blob) { resolve(blob); }, "image/jpeg", 0.85); });
+    return new Promise(function (resolve) { canvas.toBlob(function (b) { resolve(b); }, "image/jpeg", 0.85); });
   }
-
   function postForm(url, form) {
     return fetch(url, { method: "POST", headers: { "X-Kiosk-ID": KIOSK_ID }, body: form })
       .then(function (res) {
-        if (res.status === 503) { handleServiceError(); return { __svc: true }; }
-        return res.json().catch(function(){ return null; });
+        if (res.status === 503) return { __svc: true };
+        return res.json().catch(function () { return null; });
       });
   }
-
   function postJson(url, body) {
-    return fetch(url, { method: "POST", headers: { "X-Kiosk-ID": KIOSK_ID, "Content-Type": "application/json" },
-      body: JSON.stringify(body) })
+    return fetch(url, { method: "POST", headers: { "X-Kiosk-ID": KIOSK_ID, "Content-Type": "application/json" }, body: JSON.stringify(body) })
       .then(function (res) {
-        if (res.status === 503) { handleServiceError(); return { __svc: true, __status: 503 }; }
-        return res.json().then(function (j) { return { __status: res.status, data: j }; }).catch(function(){ return { __status: res.status, data: null }; });
+        if (res.status === 503) return { __svc: true, __status: 503 };
+        return res.json().then(function (j) { return { __status: res.status, data: j }; }).catch(function () { return { __status: res.status, data: null }; });
       });
   }
 
-  function scan() {
-    if (!scanningAllowed()) return;
+  function tickScan() {
+    if (!scanningEnabled()) return;
+    if (challenge && challenge.firstBlob && (nowMs() - challenge.startedAt) < CHALLENGE_HOLD_MS) return;
     inFlight = true;
     captureBlob().then(function (blob) {
       if (!blob) return null;
-      if (challengeDir && challengeFirst) {
+      if (uiState !== "scanning") return null;
+      if (challenge && challenge.firstBlob) {
         var f2 = new FormData();
-        f2.append("image", challengeFirst, "frame1.jpg");
-        f2.append("challenge", challengeDir);
+        f2.append("image", challenge.firstBlob, "frame1.jpg");
+        f2.append("challenge", challenge.dir);
         f2.append("challenge_image", blob, "frame2.jpg");
-        challengeDir = null; challengeFirst = null;
-        return postForm("/api/scan", f2);
+        var dir = challenge.dir;
+        challenge = null;
+        faceGuide.className = "face-guide detected"; scanLine.className = "scan-line active";
+        setFeedback("accent", "Verifying your identity...");
+        return postForm("/api/scan", f2).then(function (p) { return { payload: p, challenged: dir }; });
       }
       var f = new FormData(); f.append("image", blob, "frame.jpg");
-      return postForm("/api/scan", f).then(function (payload) {
-        if (payload && payload.__svc) return payload;
-        if (payload && payload.status === "challenge_required" && payload.challenge) {
-          challengeDir = payload.challenge; challengeFirst = blob;
-          setStatus("waiting", challengeDir === "left" ? "Turn your head LEFT" : "Turn your head RIGHT", "Hold briefly, then face forward.");
-          return null;
+      return postForm("/api/scan", f).then(function (p) {
+        if (p && p.__svc) return { payload: p, challenged: null };
+        if (p && (p.status === "too_small" || p.status === "blurry")) {
+          faceGuide.className = "face-guide detected"; scanLine.className = "scan-line active";
+          setFeedback("accent", "Face detected. Hold still.");
         }
-        return payload;
+        return { payload: p, challenged: null };
       });
-    }).then(function (payload) {
-      if (!payload || payload.__svc) return;
-      handleScanPayload(payload);
-    }).catch(function(){ handleServiceError(); })
-      .finally(function(){ inFlight = false; });
+    }).then(function (res) {
+      if (!res || uiState !== "scanning") return;
+      var p = res.payload;
+      if (!p || p.__svc) { handleBackendUnavailable(); return; }
+      handleScanPayload(p, res.challenged);
+    }).catch(function () { if (uiState === "scanning") handleBackendUnavailable(); })
+      .then(function () { inFlight = false; }, function () { inFlight = false; });
   }
 
-  function showResultOk(action, att) {
-    clearTimers();
-    showingResult = true; current = null;
-    lastEventId = att && att.id;
-    var label = action === "out" ? "Clocked out" : "Clocked in";
-    resultMain.textContent = label;
-    resultSub.textContent = "Recorded at " + fmtTime(att && att.timestamp ? att.timestamp : new Date());
-    resultNote.textContent = "";
-    btnUndo.hidden = false;
-    undoDeadline = Date.now() + UNDO_MS;
-    function tickUndo() {
-      var left = Math.max(0, Math.ceil((undoDeadline - Date.now()) / 1000));
-      undoSecs.textContent = String(left);
-      if (left <= 0) { window.clearInterval(undoTimerId); undoTimerId = null; btnUndo.hidden = true; }
+  function handleBackendUnavailable() {
+    if (uiState !== "scanning") return;
+    uiState = "error"; setSystemStatus("error", "Service unavailable");
+    scanLine.className = "scan-line"; faceGuide.className = "face-guide";
+    setDialog("error", "error", "Attendance service temporarily unavailable.", "Please contact reception for assistance.", "", [
+      { label: "Try again", cls: "btn-primary", onClick: function () { resetToScanning(); } }
+    ]);
+  }
+
+  function handleScanPayload(p, challenged) {
+    if (!p) return;
+    var st = p.status;
+    if (st === "challenge_required" && p.challenge) {
+      challenge = { dir: p.challenge, firstBlob: null, startedAt: 0 };
+      faceGuide.className = "face-guide detected"; scanLine.className = "scan-line";
+      captureBlob().then(function (b) { if (challenge && challenge.dir === p.challenge) { challenge.firstBlob = b; challenge.startedAt = nowMs(); } });
+      var dirText = p.challenge === "left" ? "Turn your head LEFT" : "Turn your head RIGHT";
+      setFeedback("accent", dirText + ", then face forward.");
+      return;
     }
-    tickUndo();
-    undoTimerId = window.setInterval(tickUndo, 250);
-    showScreen("result");
-    scheduleResultReset();
+    if (st === "ok" && p.token) {
+      failCount = 0; challenge = null;
+      faceGuide.className = "face-guide verified"; scanLine.className = "scan-line";
+      handleRecognised(p);
+      return;
+    }
+    if (st === "spoof") {
+      failCount += 1;
+      setFeedback("warn", "We couldn't recognise you. Please try again.");
+      faceGuide.className = "face-guide failed"; scanLine.className = "scan-line";
+      if (failCount >= FAIL_REDIRECT_AFTER) showUnrecognised("We couldn't recognise you.", "Please try again or contact reception. Manual attendance is available below.");
+      return;
+    }
+    scanLine.className = "scan-line";
+    if (st === "no_face") {
+      faceGuide.className = "face-guide waiting";
+      setFeedback("neutral", "Position your face inside the guide.");
+      return;
+    }
+    if (st === "multiple_faces") {
+      faceGuide.className = "face-guide failed";
+      setFeedback("warn", "Please ensure only one person is in front of the camera.");
+      return;
+    }
+    if (st === "too_small" || st === "blurry" || st === "invalid_image") {
+      faceGuide.className = "face-guide detected";
+      setFeedback("accent", st === "blurry" ? "Hold still and face the camera." : "Position your face inside the guide.");
+      return;
+    }
+    if (st === "not_recognised" || st === "ambiguous") {
+      failCount += 1;
+      faceGuide.className = "face-guide failed";
+      setFeedback("warn", "We couldn't recognise you. Please try again.");
+      if (failCount >= FAIL_REDIRECT_AFTER) {
+        showUnrecognised(st === "ambiguous" ? "Unable to verify your identity." : "We couldn't recognise you.",
+          "Please try again or contact reception. Manual attendance is available below.");
+      }
+      return;
+    }
+    faceGuide.className = "face-guide waiting";
+    setFeedback("neutral", "Position your face inside the guide.");
+  }
+
+  function showUnrecognised(title, desc) {
+    uiState = "dialog"; setSystemStatus("warn", "Camera ready");
+    var actions = [
+      { label: "Try again", cls: "btn-primary", onClick: function () { failCount = 0; resetToScanning(); } }
+    ];
+    setDialog("warn", "warn", title, desc, "", actions);
+    setTimeout(function () { if (uiState === "dialog" && dialogTitle.textContent === title) { failCount = 0; resetToScanning(); } }, FAIL_REDIRECT_MS);
+  }
+
+  function handleRecognised(p) {
+    uiState = "processing"; inFlight = false;
+    faceGuide.className = "face-guide detected"; scanLine.className = "scan-line";
+    var allowed = p.allowed_actions || [];
+    var msg = p.message || "";
+    lastShift = p.shift_summary || null; lastName = p.name || null;
+    session = { token: p.token, name: p.name || "", shift_summary: p.shift_summary || "Not assigned",
+      message: msg, allowed_actions: allowed, expiresAt: nowMs() + ((p.token_expires_in || 20) * 1000) };
+    lastToken = p.token;
+
+    if (msg === "before_window" || msg === "no_shift_request_approval") {
+      showBlocked(msg, p);
+      return;
+    }
+    if (allowed.indexOf("out") !== -1 && allowed.indexOf("in") === -1 && msg === "clock_out_early_confirm") {
+      showEarlyConfirm();
+      return;
+    }
+    if (allowed.indexOf("in") !== -1 && allowed.indexOf("out") === -1) {
+      doClock("in", false);
+      return;
+    }
+    if (allowed.indexOf("out") !== -1 && allowed.indexOf("in") === -1) {
+      if (msg === "clock_out_early_confirm") { showEarlyConfirm(); return; }
+      doClock("out", false);
+      return;
+    }
+    if (allowed.indexOf("out") !== -1 && allowed.indexOf("in") !== -1) {
+      // both allowed (unexpected) - prefer out to close open session
+      doClock("out", false);
+      return;
+    }
+    showBlocked(msg, p);
+  }
+
+  function tokenValid() { return session && session.token && nowMs() < session.expiresAt; }
+  function expireSessionNote() {
+    dialogError.textContent = "The confirmation time ran out. Please scan again.";
+    setTimeout(function () { resetToScanning(); }, 1200);
+  }
+
+  function showEarlyConfirm() {
+    var remain = session ? Math.max(1, Math.ceil((session.expiresAt - nowMs()) / 1000)) : 0;
+    setDialog("warn", "warn", "Clock out early?", "Your assigned shift has not ended yet. Are you sure you want to clock out now?",
+      remain > 0 ? ("Confirm within " + remain + " seconds.") : "", [
+        { label: "Cancel", cls: "btn-neutral", onClick: function () { resetToScanning(); } },
+        { label: "Confirm clock out", cls: "btn-primary", onClick: function () {
+            if (!tokenValid()) { expireSessionNote(); return; }
+            doClock("out", true);
+          } }
+      ]);
+  }
+
+  function showBlocked(msg, p) {
+    var title = "Attendance not available";
+    var desc = "Please try again later or contact reception.";
+    var reason = "out_of_window";
+    if (msg === "no_shift_request_approval") { title = "No shift assigned"; desc = "There is no shift assigned for you today. You can request approval or contact reception."; reason = "no_shift"; }
+    else if (msg === "before_window") { title = "Too early to clock in"; desc = "Your clock-in window has not opened yet. Please try again later or request approval."; reason = "out_of_window"; }
+    setDialog("info", "info", title, desc, "", [
+      { label: "Back to scan", cls: "btn-neutral", onClick: function () { resetToScanning(); } },
+      { label: "Request approval", cls: "btn-primary", onClick: function () { requestApproval(reason); } }
+    ]);
+  }
+
+  function requestApproval(reason) {
+    if (!session || !session.token) { resetToScanning(); return; }
+    var action = (session.allowed_actions || []).indexOf("out") !== -1 ? "out" : "in";
+    dialogError.textContent = "Sending request...";
+    postJson("/api/clock/request", { token: session.token, action: action, reason_code: reason || "out_of_window" })
+      .then(function (res) {
+        if (res.__svc) { handleBackendUnavailable(); return; }
+        if (res.__status >= 200 && res.__status < 300) {
+          showResultNeutral("Approval requested", session.name || "", "A manager will review your request.", "If you need help, please contact reception.");
+        } else {
+          var d = (res.data && res.data.detail) || {};
+          if (d.reason === "expired") { expireSessionNote(); return; }
+          dialogError.textContent = "Could not send the request. Please contact reception.";
+        }
+      }).catch(function () { dialogError.textContent = "Could not send the request. Please contact reception."; });
   }
 
   function doClock(action, confirm) {
-    if (!current || !current.token) return;
-    confirmError.textContent = "";
-    btnIn.disabled = true; btnOut.disabled = true;
-    postJson("/api/clock", { token: current.token, action: action, confirm: !!confirm })
+    if (!session || !session.token) { resetToScanning(); return; }
+    if (!tokenValid()) { setDialog("warn","warn","Session expired","The confirmation time ran out. Please scan again.","",[{label:"OK",cls:"btn-primary",onClick:function(){resetToScanning();}}]); return; }
+    uiState = "processing";
+    dialogError.textContent = "";
+    setFeedback("accent", "Recording attendance...");
+    postJson("/api/clock", { token: session.token, action: action, confirm: !!confirm })
       .then(function (res) {
-        if (res.__svc) { resetAll(); return; }
-        var status = res.__status, data = res.data || {};
-        if (status === 200 && data.attendance) { lastAction = action; showResultOk(action, data.attendance); return; }
+        if (res.__svc) { handleBackendUnavailable(); return; }
+        var st = res.__status, data = res.data || {};
+        if (st === 200 && data.attendance) {
+          lastAction = action; lastEventId = data.attendance.id; showSuccess(action, data.attendance); return;
+        }
         var detail = data.detail || {};
-        if (status === 409 && detail.status === "confirm_required" && action === "out") {
-          earlyBox.hidden = false; btnIn.disabled = (current.allowed_actions||[]).indexOf("in")===-1; btnOut.disabled = false; return;
+        if (st === 409 && detail.status === "confirm_required" && action === "out") { showEarlyConfirm(); return; }
+        if (st === 400 && (detail.reason === "expired" || detail.reason === "used")) {
+          setDialog("warn","warn","Session expired","The confirmation time ran out. Please scan again.","",[{label:"Try again",cls:"btn-primary",onClick:function(){resetToScanning();}}]); return;
         }
-        if (status === 400 && detail.reason === "expired") {
-          setStatus("error", "Session expired", "The confirmation time ran out. Please scan again.");
-          resetAll(); return;
-        }
-        confirmError.textContent = (detail.message || detail.reason || "The action could not be completed.") + " Please try again or " + RECEPTION + ".";
-        if (current) { var allowed=current.allowed_actions||[]; btnIn.disabled=allowed.indexOf("in")===-1; btnOut.disabled=allowed.indexOf("out")===-1; }
-      }).catch(function(){
-        confirmError.textContent = "Service unavailable. Please try again or " + RECEPTION + ".";
-        if (current) { btnIn.disabled=false; btnOut.disabled=false; }
-      });
+        setDialog("error","error","Attendance could not be recorded", (detail.message || "Please try again or contact reception."), "", [
+          { label: "Try again", cls: "btn-primary", onClick: function () { resetToScanning(); } }
+        ]);
+      }).catch(function () { handleBackendUnavailable(); });
   }
 
-  btnIn.addEventListener("click", function(){ doClock("in", false); });
-  btnOut.addEventListener("click", function(){
-    if (!current) return;
-    if (current.message === "clock_out_early_confirm") { earlyBox.hidden = false; return; }
-    doClock("out", false);
-  });
-  earlyYes.addEventListener("click", function(){ earlyBox.hidden = true; doClock("out", true); });
-  earlyNo.addEventListener("click", function(){ earlyBox.hidden = true; });
+  function showSuccess(action, att) {
+    clearTimers(); uiState = "success"; session = null; challenge = null;
+    setSystemStatus("ok", "Camera ready");
+    var isOut = action === "out";
+    successIndicator.className = "success-indicator ok";
+    successIndicator.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+    successHeading.textContent = "Attendance Verified";
+    successName.textContent = lastName || "";
+    successVerify.textContent = "Your identity has been successfully verified.";
+    detailAction.innerHTML = '<span class="pill ' + (isOut ? "out" : "in") + '">' + (isOut ? "Clock Out" : "Clock In") + '</span>';
+    detailTime.textContent = fmtTime(att && att.timestamp ? att.timestamp : new Date());
+    detailShift.textContent = lastShift || "Not assigned";
+    finalMessage.className = "final-message ok";
+    finalMessage.textContent = isOut ? "Your departure has been recorded. Have a good day!" : "You're all set. Have a productive day!";
+    resultNote.textContent = "";
+    startUndo();
+    showView("success");
+    scheduleReset(SUCCESS_RESET_MS);
+  }
 
-  btnRequest.addEventListener("click", function(){
-    if (!current) return;
-    var reason = lastRequestReason || reasonForRequest(current.message, "in");
-    postJson("/api/clock/request", { token: current.token, action: (current.allowed_actions||[]).indexOf("out")!==-1?"out":"in", reason_code: reason })
-      .then(function(res){
-        if (res.__svc) { resetAll(); return; }
-        clearTimers(); showingResult = true; current = null;
-        resultMain.textContent = "Approval requested";
-        resultSub.textContent = "A manager will review your request.";
-        resultNote.textContent = "If you need help, " + RECEPTION + ".";
-        btnUndo.hidden = true;
-        showScreen("result"); scheduleResultReset();
-      }).catch(function(){ confirmError.textContent = "Could not send request. Please " + RECEPTION + "."; });
-  });
+  function showResultNeutral(title, name, desc, note) {
+    clearTimers(); uiState = "success"; session = null; challenge = null;
+    setSystemStatus("ok", "Camera ready");
+    successIndicator.className = "success-indicator neutral";
+    successIndicator.innerHTML = svg("info");
+    successHeading.textContent = title;
+    successName.textContent = name || "";
+    successVerify.textContent = desc || "";
+    detailAction.innerHTML = '<span class="detail-value" style="color:var(--text-secondary)">—</span>';
+    detailTime.textContent = fmtTime(new Date());
+    detailShift.textContent = lastShift || "Not assigned";
+    finalMessage.className = "final-message neutral";
+    finalMessage.textContent = note || "Please contact reception if you need assistance.";
+    btnUndo.hidden = true; resultNote.textContent = "";
+    showView("success");
+    scheduleReset(SUCCESS_RESET_MS);
+  }
 
-  btnUndo.addEventListener("click", function(){
+  function startUndo() {
+    if (!lastToken && !lastEventId) { btnUndo.hidden = true; return; }
+    var deadline = nowMs() + UNDO_MS;
+    btnUndo.hidden = false;
+    function tick() {
+      var left = Math.max(0, Math.ceil((deadline - nowMs()) / 1000));
+      undoSecs.textContent = String(left);
+      if (left <= 0) { if (undoTimer) clearInterval(undoTimer); undoTimer = null; btnUndo.hidden = true; }
+    }
+    tick();
+    undoTimer = setInterval(tick, 250);
+  }
+
+  btnUndo.addEventListener("click", function () {
     if (!lastToken && !lastEventId) return;
     postJson("/api/clock/undo", lastEventId ? { event_id: lastEventId } : { token: lastToken })
-      .then(function(res){
+      .then(function (res) {
         if (res.__status === 200) {
-          window.clearInterval(undoTimerId); btnUndo.hidden = true; window.clearTimeout(resultResetId);
-          resultMain.textContent = "Undone";
-          resultSub.textContent = "The clock event was undone.";
+          if (undoTimer) { clearInterval(undoTimer); undoTimer = null; }
+          btnUndo.hidden = true; if (resetTimer) clearTimeout(resetTimer);
+          successHeading.textContent = "Attendance undone";
+          successVerify.textContent = "The clock event was undone.";
+          finalMessage.className = "final-message neutral";
+          finalMessage.textContent = "You can scan again when ready.";
           resultNote.textContent = "";
-          scheduleResultReset();
+          scheduleReset(2500);
         } else {
           var d = (res.data && res.data.detail) || {};
-          if (d.status === "undo_window_expired" || res.__status === 409) {
-            btnUndo.hidden = true; resultNote.textContent = "Undo time has passed. Please " + RECEPTION + " if this needs correcting.";
-          } else { resultNote.textContent = "Could not undo. Please " + RECEPTION + "."; }
+          btnUndo.hidden = true;
+          if (d.status === "undo_window_expired" || res.__status === 409) resultNote.textContent = "Undo time has passed. Please contact reception if this needs correcting.";
+          else resultNote.textContent = "Could not undo. Please contact reception.";
         }
-      }).catch(function(){ resultNote.textContent = "Could not undo. Please " + RECEPTION + "."; });
+      }).catch(function () { resultNote.textContent = "Could not undo. Please contact reception."; });
   });
 
-  function startScanning() { if (timerId) return; timerId = window.setInterval(scan, INTERVAL_MS); }
-  function cameraErrorMessage(err) {
-    if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) return "Camera access is blocked. Allow camera permission in the browser.";
-    if (err && (err.name === "NotFoundError" || err.name === "DevicesNotFoundError")) return "No camera was found. Connect a camera and reload this page.";
-    if (err && (err.name === "NotReadableError" || err.name === "TrackStartError")) return "The camera is in use by another application.";
-    return "The camera could not be started. Use localhost or HTTPS.";
-  }
-  function startCamera() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      placeholder.textContent = "Camera access is not available in this browser.";
-      setStatus("error", "Camera unavailable", "Use a current browser on localhost or HTTPS, or " + RECEPTION + "."); return;
-    }
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
-      .then(function (mediaStream) { stream = mediaStream; video.srcObject = mediaStream; return video.play().catch(function () {}); })
-      .then(function () { placeholder.hidden = true; resetAll(); startScanning(); })
-      .catch(function (err) { placeholder.textContent = "Camera not available"; setStatus("error", "Camera blocked", cameraErrorMessage(err) + " " + RECEPTION + " if needed."); });
-  }
-  manualLink.addEventListener("click", function (event) { event.preventDefault(); manualHelp.hidden = !manualHelp.hidden; });
+  manualLink.addEventListener("click", function (e) { e.preventDefault(); manualHelp.hidden = !manualHelp.hidden; });
   window.addEventListener("beforeunload", function () { if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); });
+
   startCamera();
 })();
