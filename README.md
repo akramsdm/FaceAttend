@@ -1,8 +1,9 @@
 # Face Attendance System
 
 A single-site face-recognition attendance web app for offices and workplaces.
-Staff sign in and out at a kiosk by looking at a webcam; administrators enrol staff, review
-attendance, resolve ambiguous cases, and manage settings.
+Staff identify themselves at a kiosk by face, then explicitly **clock in or clock out** (Phase 2);
+shifts set by managers control what actions are allowed. Administrators/managers enrol staff,
+manage shifts, review attendance/approvals, resolve ambiguous cases, and manage settings.
 
 ## Stack
 
@@ -49,20 +50,81 @@ uvicorn app.main:app --reload
 
 - Health: <http://localhost:8000/health> -> `{"status":"ok"}`
 - Admin UI: <http://localhost:8000/admin/>
-- Kiosk sign-in page: <http://localhost:8000/static/signin.html>
+- Kiosk clock page: <http://localhost:8000/static/signin.html>
 
-The SQLite database (`attendance.db` by default) and tables are created at startup. `*.db`,
-`var/`, `eval_data/`, `eval_results/`, `.env`, and model files are gitignored.
+The SQLite database (`attendance.db` by default) and tables are created at startup (idempotent
+SQLite `ALTER`s/backfills; default shared shift patterns seeded). At startup the app also runs
+review-frame cleanup and missing-clock-out session closing. `*.db`, `var/`, `eval_data/`,
+`eval_results/`, `.env`, and model files are gitignored.
 
+## Roles
+
+- **admin** — full access (all staff/departments), settings/audit, staff CRUD/enrolment, attendance,
+  review queue, approvals/missing clock-outs, and all shift management.
+- **manager** — scoped to their `department_scope`: manage patterns/assignments/exceptions and view
+  resolved shifts for in-scope staff; review/decide approval requests and correct missing clock-outs
+  for their department; cannot access out-of-scope staff.
+- **staff** — interact only via the kiosk clock flow (no self-service login).
+
+State-changing admin API calls require a server-side session cookie and `X-CSRF-Token`. Sessions
+expire after `SESSION_TIMEOUT_MINUTES` and are lost on restart. Five failed logins lock the
+account for `LOCKOUT_MINUTES`.
+
+## Shift concepts (Phase 2)
+
+- **Pattern** (shared default or personal copy) + **PatternDay**: weekly grid (on/off, start/end,
+  overnight flag) with `early_window_min` (default 30), `grace_min` (10), `break_min`. Default
+  shared patterns: Office Mon–Fri 08:00–17:00, Early, Late, Weekend, Night 22:00–06:00 overnight.
+- **Assignment**: assigns a pattern to a person (effective date range); reassigning closes the
+  previous assignment the day before (history preserved).
+- **ShiftException** (reason required): `day_off` or `custom_hours` for a date; overrides the
+  pattern.
+- **Resolution order** (first match wins): exception → personal pattern → assigned shared pattern →
+  no shift.
+- **Night shifts** belong to the date they **start**; hours/grouping use `shift_date` so they do not
+  split across midnight. **Server clock in `TIMEZONE` only** (never the kiosk clock). One shift per
+  person per day.
+
+## Clock flow (kiosk)
+
+1. **Scan** — kiosk posts frames to `POST /api/scan` (quality + recognition; same logging/review
+   behavior for rejected/ambiguous; optional head-turn liveness). On a match it returns the person’s
+   name, today’s shift summary, `allowed_actions`/message (server-evaluated), and a signed **single-
+   use clock token valid 20 seconds**, bound to the person and kiosk. Never returns scores or other
+   names.
+2. **Confirm** — the person chooses **Clock in** or **Clock out** (disabled actions show the reason;
+   a 20s countdown resets on expiry). Clock out before shift end requires confirmation.
+3. **Commit** — `POST /api/clock` verifies/consumes the token, **recomputes** shift rules on the
+   server, and refuses anything not in `allowed_actions` (creates the attendance row with
+   `shift_id`/`shift_date`/flag such as `late`, `early_departure`, `overtime`). Repeating the same
+   token is idempotent (never a second row). After success the kiosk shows **Undo** for **10 seconds**
+   (`POST /api/clock/undo`, sets `undone_at`, never deletes the row).
+4. **Blocked** — when not allowed (`no_shift` / out of window / early out path), the kiosk offers
+   **Request approval** (`POST /api/clock/request`); managers approve/reject in the Approvals queue
+   (approval can create the attendance row with the appropriate flag/`approved_by`, audited).
+
+**Missing clock-outs:** `scripts/close_sessions.py` (also run at startup) closes any open session
+**4 hours after shift end** (setting `missing_close_hours`, default 4), writing an auto `out`
+flagged `missing_clock_out` (audited, idempotent). Missing clock-outs are **never counted as worked
+time automatically**; a manager enters the real time with a **required reason** (row kept, audited).
+Proposed schedule: run `.\.venv\Scripts\python.exe scripts\close_sessions.py` every 30 minutes
+(Task Scheduler/cron).
+
+The legacy `POST /api/signin` (calendar-day in/out) is kept working for existing tests/clients; the
+Phase 2 kiosk uses `/api/scan` + `/api/clock`.
 ## Kiosk full-screen instructions
 
 1. Open <http://localhost:8000/static/signin.html> on the kiosk machine/browser.
 2. Allow camera access (camera APIs require `localhost` or HTTPS).
 3. Use the browser full-screen mode (F11 on Windows/Chrome/Edge) for an unattended kiosk display.
-4. The kiosk captures a frame periodically (no overlapping requests), shows a 4s result, and never
-   displays scores or other staff names. It sends `X-Kiosk-ID` with each `POST /api/signin`.
+4. Flow: **scan** (camera loop → `/api/scan`, no overlapping requests) → on match, a **confirmation
+   screen** shows name, shift summary and time with **Clock in / Clock out** (disabled actions show a
+   reason, 20s token countdown resets on expiry; early clock-out asks for confirmation) → on success
+   shows the result ~4s with **Undo** for 10s, then resets. Blocked cases can **Request approval** and
+   show a reception contact line. The kiosk never displays scores or other staff names and sends
+   `X-Kiosk-ID`.
 5. Optional **head-turn liveness challenge** (admin setting `spoof_challenge`, default off): when
-   enabled, a matched sign-in may request a random left/right turn and submit a second frame.
+   enabled, a matched scan may request a random left/right turn and submit a second frame.
    Landmark-based confirmation helps stop a **still photo** but is **not certified anti-spoofing**
    and **may not stop a video** replay.
 
@@ -75,18 +137,24 @@ The SQLite database (`attendance.db` by default) and tables are created at start
 | Enrolment | <http://localhost:8000/admin/enrol.html> |
 | Attendance | <http://localhost:8000/admin/attendance.html> |
 | Review queue | <http://localhost:8000/admin/review.html> |
+| Approvals & missing clock-outs | <http://localhost:8000/admin/approvals.html> |
+| Shifts (patterns/assign/exceptions/preview) | <http://localhost:8000/admin/shifts/index.html> |
 | Settings | <http://localhost:8000/admin/settings.html> |
 | Audit log | <http://localhost:8000/admin/audit.html> |
 
-State-changing admin API calls require a server-side session cookie and `X-CSRF-Token`. Sessions
-expire after `SESSION_TIMEOUT_MINUTES` and are lost on restart. Five failed logins lock the
-account for `LOCKOUT_MINUTES`.
-
 ## Settings
 
-Live (DB-backed) settings are editable in the admin UI and take effect without restart (signin
-reads match/ambiguity/cooldown live): `match_threshold`, `ambiguity_margin`, `cooldown_seconds`,
-`work_start`, `grace_minutes`, `review_retention_days`, `spoof_challenge`.
+Live (DB-backed) settings are editable in the admin UI and take effect without restart (signin/
+clock-related reads use live values where applicable): `match_threshold`, `ambiguity_margin`,
+`cooldown_seconds`, `work_start`, `grace_minutes`, `review_retention_days`, `spoof_challenge`,
+`missing_close_hours` (hours after shift end before an open session is auto-closed as missing
+clock-out; default 4).
+
+Shift-aware reporting: late = first clock-in after **shift start + grace** (falls back to global
+`work_start`/`grace_minutes` when no resolved shift); monthly CSV adds early departure/overtime/
+missing-clock-out flags and hours worked per shift (`in→out` minus break), grouped by `shift_date`
+(night shifts not split). Dashboard counts present/absent **against the assigned shift** and shows
+late/missing clock-out.
 
 Environment variables (development defaults):
 
@@ -187,3 +255,57 @@ eval_data/    Local evaluation images (not committed)
 eval_results/ Evaluation outputs (not committed)
 var/          Runtime files such as temporary review frames
 ```
+## Known limitations
+
+- **Not certified anti-spoofing.** The optional head-turn challenge (landmark-based) reduces still-
+  photo risk but may not stop a video replay; treat it as a liveness aid, not a security guarantee.
+- **One shift per person per day.** No split shifts/rosters/leave management; resolution is
+  exception -> personal -> assigned shared -> none.
+- **Token & undo windows.** Scan issues a single-use clock token valid **20 seconds** (bound to
+  person + kiosk); after a successful clock the kiosk allows **Undo for 10 seconds** (undo sets
+  `undone_at`, never deletes).
+- **Overtime margin is 0** in the clock flow (`evaluate(..., margin_overtime=0)`), so overtime is
+  flagged at shift end.
+- **Missing clock-outs are never counted as worked time automatically.** Auto-close writes a
+  `missing_clock_out` out at the cut-off (audited) but it is excluded from hour pairing/totals; a
+  manager must enter the real time with a required reason.
+- **Sessions in memory.** Admin sessions/CSRF are in-process and do not survive restart.
+- **No password change UI.** Rotate admin passwords by updating the DB (hash with the app's bcrypt).
+- **SQLite `check_same_thread=False`.** Suitable for a single-site app; avoid heavy concurrent
+  writers.
+- **Legacy endpoint kept.** `POST /api/signin` (calendar-day in/out) remains for compatibility; the
+  Phase 2 kiosk uses `/api/scan` + `/api/clock`.
+- **Face model quality depends on enrolment images** and lighting/camera; ambiguous/no-match cases go
+  to the review queue with saved frames (retention-limited).
+
+## Recognition evaluation (Step K)
+
+The recognition evaluator uses the **same `Recognizer`/threshold path as the app**
+(`scripts/evaluate.py` -> `app/eval_metrics.py`). In this environment, `eval_data/` contains **no
+genuine/impostor pairs** (only a placeholder), so the run produced `enrolled=0 genuine=0 impostor=0`
+(`eval_results/20261108T181401Z/`), `--help`/exit behavior unchanged (missing data exits `2`).
+**No FAR/FRR results were fabricated and no baseline was altered; recognition logic/results are
+unchanged by Phase 2** (shift/clock work did not modify the recognizer). To produce real FAR/FRR,
+populate `eval_data/` per the eval README and re-run `scripts/evaluate.py`.
+
+## Everything not done (Step K / out of scope)
+
+- **Real recognition re-evaluation** (no labeled `eval_data/` present here) - unchanged code path
+  only; FAR/FRR not measured.
+- **Shift rosters / leave / multiple shifts per day / split shifts** (guide constraint: 1 shift per
+  person per day).
+- **Overtime margin configuration** in the UI/flow (kept at 0 as implemented).
+- **Production deployment hardening** (reverse proxy/HTTPS/cert management, persistent session store,
+  DB migrations tool like Alembic, WSGI process model for SQLite concurrency, secret rotation).
+- **Automated scheduling** of `scripts/close_sessions.py` (a 30-minute Task Scheduler/cron schedule
+  is proposed in this README but not installed by code).
+- **Full manual browser QA** of the kiosk/shift/approvals flows against a live camera and all section
+  4.2 scenarios (automated tests cover the logic; manual mapping was delivered in Step H).
+- **Pushing to `origin/main`** (branch remains ahead locally; 8 commits since `d533d94`).
+- **Docx sync** - `docs/...Phase 2 Guide....docx` left unstaged/untracked as found; the `.md` guide
+  was read.
+- **`.kilo/` and the Step D DB backup file** left untracked/unstaged intentionally.
+
+## License
+
+Internal / not specified. Add a `LICENSE` file before external distribution.
