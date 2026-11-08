@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.db import init_db
 from app.recognition import GalleryCache, Recognizer
 from app.routers.auth import router as auth_router
+from app.routers.staff import router as staff_router
 from app.security import SessionStore
 
 
@@ -20,6 +21,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Face Attendance System", lifespan=lifespan)
 app.include_router(auth_router)
+app.include_router(staff_router)
 
 
 @app.get("/health")

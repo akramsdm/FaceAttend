@@ -51,6 +51,26 @@ Send the token from login or `/api/admin/me` in the `X-CSRF-Token` header on eve
 admin request. Sessions are kept in server memory, expire after `SESSION_TIMEOUT_MINUTES`, and are
 lost when the server restarts. Five failed logins lock the account for `LOCKOUT_MINUTES`.
 
+## Staff API
+
+Every route below requires an admin session; state-changing routes also require `X-CSRF-Token`.
+
+| Method | Path | Meaning |
+| --- | --- | --- |
+| `GET` | `/api/admin/staff` | List/search staff (`q`, `active`, `include_deleted`) |
+| `POST` | `/api/admin/staff` | Create a staff member |
+| `GET` | `/api/admin/staff/{id}` | Staff details and embedding count |
+| `PATCH` | `/api/admin/staff/{id}` | Edit details or set `active` |
+| `POST` | `/api/admin/staff/{id}/deactivate` | Deactivate and remove from the gallery |
+| `DELETE` | `/api/admin/staff/{id}` | Anonymise, remove embeddings and consent, keep attendance |
+| `POST` | `/api/admin/staff/{id}/enrol` | Multipart enrolment |
+
+Enrolment takes `consent=true` and 3 to 5 files named `images`. Each image is quality-checked; the
+response gives an accept/reject result and reason per image. At least 3 images must be accepted.
+Re-enrolling replaces the previous embeddings and records a new consent row (`v1`, time, admin).
+Uploaded images are only read in memory and are never saved. The staff gallery cache is refreshed
+after enrolment, deactivation, reactivation and deletion.
+
 ## Recognition spike
 
 Download the pre-trained ONNX models (ignored by git), then run the standalone webcam check:
