@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.db import get_session
 from app.models import Attendance, Staff, utcnow
 from app.recognition import GalleryCache, Recognizer
+from app.settings_store import get_value
 
 router = APIRouter(tags=["signin"])
 
@@ -70,6 +71,11 @@ def sign_in(
     if not kiosk:
         raise HTTPException(status_code=422, detail="X-Kiosk-ID header is required")
 
+    match_threshold = get_value(db, "match_threshold")
+    ambiguity_margin = get_value(db, "ambiguity_margin")
+    cooldown_seconds = get_value(db, "cooldown_seconds")
+
+
     image_bytes = image.file.read()
 
     try:
@@ -115,8 +121,8 @@ def sign_in(
     decision = rules.decide(
         best_score,
         second_score,
-        settings.match_threshold,
-        settings.ambiguity_margin,
+        match_threshold,
+        ambiguity_margin,
     )
     staff = _eligible_staff(db, best_staff_id)
 
@@ -125,7 +131,7 @@ def sign_in(
 
     if decision == "matched" and staff is not None:
         recent = signin.attendance_within_cooldown(
-            db, staff.id, now, settings.cooldown_seconds
+            db, staff.id, now, cooldown_seconds
         )
         if recent is not None:
             signin.record_attempt(
