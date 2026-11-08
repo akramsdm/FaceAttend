@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shift patterns - Face Attendance</title>
+    <link rel="stylesheet" href="../css/admin.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="inner">
+        <p class="site-title">Face Attendance</p>
+        <nav class="site-nav" aria-label="Admin sections">
+          <a href="../dashboard.html">Dashboard</a>
+          <a href="../index.html">Staff</a>
+          <a href="../enrol.html">Enrolment</a>
+          <a href="../attendance.html">Attendance</a>
+          <a href="../review.html">Review queue</a>
+          <a href="index.html">Shifts</a>
+          <a href="../settings.html">Settings</a>
+          <a href="../audit.html">Audit log</a>
+        </nav>
+        <div class="header-right">
+          <span>Signed in as <span class="admin-name" data-admin-name>admin</span></span>
+          <button class="button secondary" type="button" data-logout>Sign out</button>
+        </div>
+      </div>
+    </header>
+    <main id="main" class="page">
+      <div class="page-head"><div><h1>Shift patterns</h1><p>Manage patterns (weekly grid), create personal copies, and navigate to assignments, exceptions and preview.</p></div></div>
+      <p class="small"><a href="index.html">Patterns</a> · <a href="assign.html">Assign</a> · <a href="exceptions.html">Exceptions</a> · <a href="preview.html">Preview week</a></p>
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+
+      <section class="panel" aria-labelledby="new-title">
+        <h2 id="new-title">Create pattern</h2>
+        <form id="pattern-form" novalidate>
+          <input type="hidden" id="pattern-id" value="" />
+          <div class="toolbar">
+            <div class="field"><label for="p-name">Name</label><input id="p-name" type="text" maxlength="100" required /></div>
+            <div class="field"><label for="p-early">Early window (min)</label><input id="p-early" type="number" min="0" max="240" value="30" /></div>
+            <div class="field"><label for="p-grace">Grace (min)</label><input id="p-grace" type="number" min="0" max="240" value="10" /></div>
+            <div class="field"><label for="p-break">Break (min)</label><input id="p-break" type="number" min="0" max="480" value="0" /></div>
+          </div>
+          <h3>Weekly grid (Mon–Sun)</h3>
+          <div class="table-wrap"><table aria-label="Weekly pattern grid">
+            <thead><tr><th scope="col">Day</th><th scope="col">On</th><th scope="col">Start (HH:MM)</th><th scope="col">End (HH:MM)</th><th scope="col">Overnight</th></tr></thead>
+            <tbody id="grid-body"></tbody>
+          </table></div>
+          <p id="form-error" class="message error" role="alert"></p>
+          <div class="button-row">
+            <button class="button" type="submit" id="save-pattern">Save pattern</button>
+            <button class="button secondary" type="button" id="cancel-edit" hidden>Cancel edit</button>
+          </div>
+        </form>
+      </section>
+      <section class="panel" aria-labelledby="list-title">
+        <h2 id="list-title">Patterns</h2>
+        <p class="small muted">Managers can edit/delete patterns they own and create personal copies. Shared default patterns are read-only for managers.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th scope="col">Name</th><th scope="col">Owner</th><th scope="col">Early/Grace/Break</th><th scope="col">Actions</th></tr></thead>
+          <tbody id="pattern-rows"><tr><td colspan="4">Loading…</td></tr></tbody>
+        </table></div>
+      </section>
+      <section class="panel" aria-labelledby="copy-title">
+        <h2 id="copy-title">Customise for this person</h2>
+        <form id="copy-form" class="toolbar" novalidate>
+          <div class="field"><label for="copy-pattern">Pattern</label><select id="copy-pattern"></select></div>
+          <div class="field"><label for="copy-staff">Staff member</label><select id="copy-staff"></select></div>
+          <button class="button" type="submit">Create personal copy</button>
+        </form>
+        <p id="copy-error" class="message error" role="alert"></p>
+      </section>
+
+    </main>
+    <script src="../js/common.js"></script>
+    <script src="../js/shifts_patterns.js"></script>
+  </body>
+</html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Assign patterns - Face Attendance</title>
+    <link rel="stylesheet" href="../css/admin.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="inner">
+        <p class="site-title">Face Attendance</p>
+        <nav class="site-nav" aria-label="Admin sections">
+          <a href="../dashboard.html">Dashboard</a>
+          <a href="../index.html">Staff</a>
+          <a href="../enrol.html">Enrolment</a>
+          <a href="../attendance.html">Attendance</a>
+          <a href="../review.html">Review queue</a>
+          <a href="index.html">Shifts</a>
+          <a href="../settings.html">Settings</a>
+          <a href="../audit.html">Audit log</a>
+        </nav>
+        <div class="header-right">
+          <span>Signed in as <span class="admin-name" data-admin-name>admin</span></span>
+          <button class="button secondary" type="button" data-logout>Sign out</button>
+        </div>
+      </div>
+    </header>
+    <main id="main" class="page">
+      <div class="page-head"><div><h1>Assign patterns</h1><p>Assign a pattern to selected staff or a department with an effective date. Confirm the summary before applying.</p></div></div>
+      <p class="small"><a href="index.html">Patterns</a> · <a href="assign.html">Assign</a> · <a href="exceptions.html">Exceptions</a> · <a href="preview.html">Preview week</a></p>
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+
+      <section class="panel" aria-labelledby="a-title">
+        <h2 id="a-title">Assign pattern</h2>
+        <form id="assign-form" novalidate>
+          <div class="toolbar">
+            <div class="field"><label for="a-pattern">Pattern</label><select id="a-pattern" required></select></div>
+            <div class="field"><label for="a-effective">Effective date</label><input id="a-effective" type="date" required /></div>
+          </div>
+          <div class="toolbar">
+            <div class="field"><label for="a-dept">Department (optional, bulk)</label><input id="a-dept" type="text" placeholder="e.g. Eng" /></div>
+          </div>
+          <fieldset class="field"><legend class="label">Staff (select one or more)</legend>
+            <div id="staff-checks" class="small" style="max-height:16rem;overflow:auto;border:1px solid var(--line);padding:.5rem;border-radius:8px"></div>
+          </fieldset>
+          <p class="help">Assigning ends each person's previous assignment the day before the effective date (history preserved). Managers only see staff in their department scope.</p>
+          <div id="summary" class="message info" aria-live="polite"></div>
+          <p id="a-error" class="message error" role="alert"></p>
+          <div class="button-row">
+            <button class="button secondary" type="button" id="preview-btn">Preview summary</button>
+            <button class="button" type="submit" id="confirm-btn" disabled>Confirm assignment</button>
+          </div>
+        </form>
+      </section>
+
+    </main>
+    <script src="../js/common.js"></script>
+    <script src="../js/shifts_assign.js"></script>
+  </body>
+</html>
