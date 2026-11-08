@@ -144,7 +144,7 @@
   function safeNextPath() {
     var raw = new URLSearchParams(window.location.search).get("next");
     if (!raw) {
-      return "/admin/index.html";
+      return "/admin/dashboard.html";
     }
     try {
       var url = new URL(raw, window.location.origin);
@@ -158,7 +158,7 @@
     } catch (error) {
       /* Fall through to the default. */
     }
-    return "/admin/index.html";
+    return "/admin/dashboard.html";
   }
 
   window.FA = {

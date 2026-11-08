@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Audit log - Face Attendance</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="inner">
+        <p class="site-title">Face Attendance</p>
+        <nav class="site-nav" aria-label="Admin sections">
+          <a href="dashboard.html">Dashboard</a>
+          <a href="index.html">Staff</a>
+          <a href="enrol.html">Enrolment</a>
+          <a href="attendance.html">Attendance</a>
+          <a href="review.html">Review queue</a>
+          <a href="settings.html">Settings</a>
+          <a href="audit.html" aria-current="page">Audit log</a>
+        </nav>
+        <div class="header-right">
+          <span>Signed in as <span class="admin-name" data-admin-name>admin</span></span>
+          <button class="button secondary" type="button" data-logout>Sign out</button>
+        </div>
+      </div>
+    </header>
+    <main id="main" class="page">
+      <div class="page-head"><div><h1>Audit log</h1><p>Admin actions and changes (most recent first).</p></div>
+        <div class="button-row"><button id="prev" class="button secondary" type="button">Previous</button><button id="next" class="button secondary" type="button">Next</button></div>
+      </div>
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+      <section class="panel" aria-labelledby="log-title">
+        <h2 id="log-title">Entries</h2>
+        <p id="page-info" class="muted small"></p>
+        <div class="table-wrap">
+          <table>
+            <caption>Audit log entries.</caption>
+            <thead><tr><th scope="col">Time</th><th scope="col">Admin ID</th><th scope="col">Action</th><th scope="col">Target</th><th scope="col">Detail</th></tr></thead>
+            <tbody id="rows"><tr><td colspan="5">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="js/common.js"></script>
+    <script src="js/audit.js"></script>
+  </body>
+</html>

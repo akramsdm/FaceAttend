@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Review queue - Face Attendance</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="inner">
+        <p class="site-title">Face Attendance</p>
+        <nav class="site-nav" aria-label="Admin sections">
+          <a href="dashboard.html">Dashboard</a>
+          <a href="index.html">Staff</a>
+          <a href="enrol.html">Enrolment</a>
+          <a href="attendance.html">Attendance</a>
+          <a href="review.html" aria-current="page">Review queue</a>
+          <a href="settings.html">Settings</a>
+          <a href="audit.html">Audit log</a>
+        </nav>
+        <div class="header-right">
+          <span>Signed in as <span class="admin-name" data-admin-name>admin</span></span>
+          <button class="button secondary" type="button" data-logout>Sign out</button>
+        </div>
+      </div>
+    </header>
+    <main id="main" class="page">
+      <div class="page-head">
+        <div>
+          <h1>Review queue</h1>
+          <p>Unresolved failed or low-confidence attempts. Assign creates an attendance record (review, in/out by daily rule) or dismiss. Resolving deletes the temporary frame.</p>
+        </div>
+        <button id="refresh" class="button secondary" type="button">Refresh</button>
+      </div>
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+      <section class="panel" aria-labelledby="queue-title">
+        <h2 id="queue-title">Unresolved attempts</h2>
+        <div id="items" class="review-list">Loading…</div>
+      </section>
+    </main>
+    <script src="js/common.js"></script>
+    <script src="js/review.js"></script>
+  </body>
+</html>

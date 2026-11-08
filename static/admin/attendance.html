@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Attendance - Face Attendance</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="inner">
+        <p class="site-title">Face Attendance</p>
+        <nav class="site-nav" aria-label="Admin sections">
+          <a href="dashboard.html">Dashboard</a>
+          <a href="index.html">Staff</a>
+          <a href="enrol.html">Enrolment</a>
+          <a href="attendance.html" aria-current="page">Attendance</a>
+          <a href="review.html">Review queue</a>
+          <a href="settings.html">Settings</a>
+          <a href="audit.html">Audit log</a>
+        </nav>
+        <div class="header-right">
+          <span>Signed in as <span class="admin-name" data-admin-name>admin</span></span>
+          <button class="button secondary" type="button" data-logout>Sign out</button>
+        </div>
+      </div>
+    </header>
+    <main id="main" class="page">
+      <div class="page-head">
+        <div>
+          <h1>Attendance</h1>
+          <p>Filter records, add or correct entries (a reason is required and recorded), and export CSV.</p>
+        </div>
+      </div>
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+
+      <section class="panel" aria-labelledby="filters-title">
+        <h2 id="filters-title">Filters and export</h2>
+        <form id="filters-form" class="toolbar">
+          <div class="field"><label for="start">Start date</label><input id="start" name="start" type="date" /></div>
+          <div class="field"><label for="end">End date</label><input id="end" name="end" type="date" /></div>
+          <div class="field"><label for="staff-id">Staff ID (optional)</label><input id="staff-id" name="staff_id" type="number" min="1" inputmode="numeric" /></div>
+          <div class="field"><label for="department">Department (optional)</label><input id="department" name="department" type="text" /></div>
+          <div class="button-row">
+            <button class="button" type="submit">Apply filters</button>
+            <button id="export" class="button secondary" type="button">Download export CSV</button>
+            <button id="monthly" class="button secondary" type="button">Download monthly report CSV</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="editor" class="panel" aria-labelledby="editor-title" hidden>
+        <h2 id="editor-title">Manual attendance record</h2>
+        <form id="edit-form" novalidate>
+          <input id="edit-id" type="hidden" />
+          <div class="field"><label for="edit-staff">Staff ID (required for new record)</label><input id="edit-staff" type="number" min="1" /></div>
+          <div class="field"><label for="edit-type">Type</label>
+            <select id="edit-type"><option value="in">In</option><option value="out">Out</option></select></div>
+          <div class="field"><label for="edit-time">Local time (YYYY-MM-DDTHH:MM, required)</label><input id="edit-time" type="datetime-local" /></div>
+          <div class="field"><label for="edit-reason">Reason (required; recorded in audit log)</label><input id="edit-reason" type="text" maxlength="500" required /></div>
+          <p id="edit-error" class="message error" role="alert"></p>
+          <div class="button-row">
+            <button class="button" type="submit">Save</button>
+            <button id="cancel-edit" class="button secondary" type="button">Cancel</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel" aria-labelledby="table-title">
+        <div class="page-head">
+          <h2 id="table-title">Records</h2>
+          <button id="add-record" class="button" type="button">Add manual record</button>
+        </div>
+        <p id="count" class="muted small" aria-live="polite">Loading…</p>
+        <div class="table-wrap">
+          <table>
+            <caption>Attendance records (local times shown).</caption>
+            <thead><tr><th scope="col">ID</th><th scope="col">Staff</th><th scope="col">Department</th><th scope="col">Type</th><th scope="col">Local time</th><th scope="col">Method</th><th scope="col">Edited by</th><th scope="col">Reason</th><th scope="col">Actions</th></tr></thead>
+            <tbody id="rows"><tr><td colspan="9">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="js/common.js"></script>
+    <script src="js/attendance.js"></script>
+  </body>
+</html>

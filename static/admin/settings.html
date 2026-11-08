@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Settings - Face Attendance</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="inner">
+        <p class="site-title">Face Attendance</p>
+        <nav class="site-nav" aria-label="Admin sections">
+          <a href="dashboard.html">Dashboard</a>
+          <a href="index.html">Staff</a>
+          <a href="enrol.html">Enrolment</a>
+          <a href="attendance.html">Attendance</a>
+          <a href="review.html">Review queue</a>
+          <a href="settings.html" aria-current="page">Settings</a>
+          <a href="audit.html">Audit log</a>
+        </nav>
+        <div class="header-right">
+          <span>Signed in as <span class="admin-name" data-admin-name>admin</span></span>
+          <button class="button secondary" type="button" data-logout>Sign out</button>
+        </div>
+      </div>
+    </header>
+    <main id="main" class="page">
+      <div class="page-head"><div><h1>Settings</h1><p>Values take effect immediately (no restart). Each change is recorded in the audit log.</p></div></div>
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+      <section class="panel" aria-labelledby="settings-title">
+        <h2 id="settings-title">Recognition and operations</h2>
+        <form id="settings-form" novalidate>
+          <div class="field">
+            <label for="match_threshold">Match threshold (0–1)</label>
+            <input id="match_threshold" name="match_threshold" type="number" min="0" max="1" step="0.001" required />
+            <p class="help">Higher = fewer false accepts (wrong person accepted) but more false rejects (right person rejected). Lower does the opposite.</p>
+          </div>
+          <div class="field">
+            <label for="ambiguity_margin">Ambiguity margin (0–1)</label>
+            <input id="ambiguity_margin" name="ambiguity_margin" type="number" min="0" max="1" step="0.001" required />
+            <p class="help">If the best and second-best scores are within this margin, the result is treated as ambiguous (rejected) — reduces false accepts when candidates look similar, may increase false rejects.</p>
+          </div>
+          <div class="field">
+            <label for="cooldown_seconds">Cooldown seconds (0–3600)</label>
+            <input id="cooldown_seconds" name="cooldown_seconds" type="number" min="0" max="3600" step="1" required />
+            <p class="help">Ignores a repeat scan by the same person within this window — prevents duplicate records; too high can block a legitimate re-scan.</p>
+          </div>
+          <div class="field">
+            <label for="work_start">Work start (HH:MM, local)</label>
+            <input id="work_start" name="work_start" type="time" required />
+            <p class="help">Used with grace minutes to flag late arrivals in reports; does not change sign-in acceptance.</p>
+          </div>
+          <div class="field">
+            <label for="grace_minutes">Grace minutes (0–720)</label>
+            <input id="grace_minutes" name="grace_minutes" type="number" min="0" max="720" step="1" required />
+            <p class="help">Arrivals at or before work start + grace are not late; after that boundary are counted as late arrivals.</p>
+          </div>
+          <div class="field">
+            <label for="review_retention_days">Review-frame retention days (1–365)</label>
+            <input id="review_retention_days" name="review_retention_days" type="number" min="1" max="365" step="1" required />
+            <p class="help">Temporary review-queue frames older than this are deleted at startup/cleanup; shorter retention improves privacy but reduces time to review.</p>
+          </div>
+          <p id="error" class="message error" role="alert"></p>
+          <div class="button-row"><button class="button" type="submit">Save settings</button></div>
+        </form>
+      </section>
+    </main>
+    <script src="js/common.js"></script>
+    <script src="js/settings.js"></script>
+  </body>
+</html>

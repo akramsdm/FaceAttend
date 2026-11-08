@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dashboard - Face Attendance</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="inner">
+        <p class="site-title">Face Attendance</p>
+        <nav class="site-nav" aria-label="Admin sections">
+          <a href="dashboard.html" aria-current="page">Dashboard</a>
+          <a href="index.html">Staff</a>
+          <a href="enrol.html">Enrolment</a>
+          <a href="attendance.html">Attendance</a>
+          <a href="review.html">Review queue</a>
+          <a href="settings.html">Settings</a>
+          <a href="audit.html">Audit log</a>
+        </nav>
+        <div class="header-right">
+          <span>Signed in as <span class="admin-name" data-admin-name>admin</span></span>
+          <button class="button secondary" type="button" data-logout>Sign out</button>
+        </div>
+      </div>
+    </header>
+    <main id="main" class="page">
+      <div class="page-head">
+        <div>
+          <h1>Dashboard</h1>
+          <p>Today’s attendance and recognition summary (local time: <span id="tz-label">UTC</span>).</p>
+        </div>
+        <button id="refresh" class="button secondary" type="button">Refresh</button>
+      </div>
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+      <section class="panel" aria-labelledby="summary-title">
+        <h2 id="summary-title">Today</h2>
+        <div class="summary-grid" role="list">
+          <div class="summary-card" role="listitem"><p class="summary-label">Present today</p><p id="present" class="summary-value">-</p></div>
+          <div class="summary-card" role="listitem"><p class="summary-label">Absent today</p><p id="absent" class="summary-value">-</p></div>
+          <div class="summary-card" role="listitem"><p class="summary-label">Late arrivals</p><p id="late" class="summary-value">-</p></div>
+          <div class="summary-card" role="listitem"><p class="summary-label">Recognition success rate (today)</p><p id="success" class="summary-value">-</p></div>
+        </div>
+        <p class="muted small" id="detail"></p>
+      </section>
+    </main>
+    <script src="js/common.js"></script>
+    <script src="js/dashboard.js"></script>
+  </body>
+</html>
