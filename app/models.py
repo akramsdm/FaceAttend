@@ -22,7 +22,9 @@ from app.db import Base
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    """Naive UTC, so SQLite reads and writes compare consistently."""
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class EmbeddingVector(TypeDecorator[np.ndarray]):
