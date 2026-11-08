@@ -27,6 +27,9 @@ uvicorn app.main:app --reload
 
 Health check: <http://localhost:8000/health> returns `{"status": "ok"}`.
 
+The SQLite database (`attendance.db` by default) and its tables are created automatically at
+startup. The file is ignored by git.
+
 ## Recognition spike
 
 Download the pre-trained ONNX models (ignored by git), then run the standalone webcam check:
