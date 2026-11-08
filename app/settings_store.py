@@ -19,6 +19,7 @@ DEFINITIONS: dict[str, dict[str, Any]] = {
     "grace_minutes": {"type": int, "min": 0, "max": 720, "default": lambda s: s.grace_minutes},
     "review_retention_days": {"type": int, "min": 1, "max": 365, "default": lambda s: s.review_retention_days},
     "spoof_challenge": {"type": bool, "default": lambda s: False},
+    "missing_close_hours": {"type": int, "min": 1, "max": 48, "default": lambda s: 4},
 }
 
 
