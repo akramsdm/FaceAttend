@@ -37,7 +37,10 @@ class SigninResponse(BaseModel):
 class ScanResponse(BaseModel):
     status: str
     name: str | None = None
+    department: str | None = None
     shift_summary: str | None = None
+    shift_start: str | None = None
+    shift_end: str | None = None
     allowed_actions: list[str] = []
     message: str | None = None
     token: str | None = None
@@ -239,7 +242,10 @@ def scan_face(
     ev = evaluate(local_now, sh, open_session, margin_overtime=0)
     token, _row = issue_clock_token(db, staff_id=staff.id, kiosk_id=kiosk, now=now, ttl_seconds=TOKEN_TTL_SECONDS)
     db.commit()
-    return ScanResponse(status="ok", name=staff.name, shift_summary=_shift_summary(sh),
+    return ScanResponse(status="ok", name=staff.name, department=staff.department,
+                        shift_summary=_shift_summary(sh),
+                        shift_start=_iso(sh.start) if sh is not None else None,
+                        shift_end=_iso(sh.end) if sh is not None else None,
                         allowed_actions=list(ev.get("allowed_actions") or []),
                         message=ev.get("message"), token=token, token_expires_in=TOKEN_TTL_SECONDS)
 
