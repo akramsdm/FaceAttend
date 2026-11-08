@@ -4,11 +4,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.db import init_db
+from app.recognition import GalleryCache, Recognizer
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
+    app.state.recognizer = Recognizer()
+    app.state.gallery = GalleryCache()
     yield
 
 

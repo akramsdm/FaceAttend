@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 
 import pytest
+from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -9,13 +10,22 @@ from app.db import Base, create_db_engine
 
 
 @pytest.fixture()
-def session() -> Iterator[Session]:
-    engine = create_db_engine("sqlite+pysqlite:///:memory:", poolclass=StaticPool)
-    Base.metadata.create_all(engine)
-    testing_session = sessionmaker(bind=engine, expire_on_commit=False)
+def engine() -> Iterator[Engine]:
+    database_engine = create_db_engine(
+        "sqlite+pysqlite:///:memory:", poolclass=StaticPool
+    )
+    Base.metadata.create_all(database_engine)
+    yield database_engine
+    Base.metadata.drop_all(database_engine)
+    database_engine.dispose()
 
-    with testing_session() as session:
+
+@pytest.fixture()
+def session_factory(engine: Engine) -> sessionmaker[Session]:
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+@pytest.fixture()
+def session(session_factory: sessionmaker[Session]) -> Iterator[Session]:
+    with session_factory() as session:
         yield session
-
-    Base.metadata.drop_all(engine)
-    engine.dispose()

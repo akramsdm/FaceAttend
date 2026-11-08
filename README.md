@@ -69,7 +69,10 @@ Settings are read from environment variables with development defaults:
 | `DATABASE_URL` | `sqlite:///./attendance.db` | SQLAlchemy database URL |
 | `SECRET_KEY` | development-only placeholder | Session signing secret; set a real value outside development |
 | `MATCH_THRESHOLD` | `0.363` | Minimum face-match score (SFace cosine similarity) |
+| `AMBIGUITY_MARGIN` | `0.05` | If the best two people are closer than this, treat the result as ambiguous |
 | `COOLDOWN_SECONDS` | `60` | Ignore duplicate scans from the same person within this window |
 | `MAX_FAILED_ATTEMPTS` | `5` | Failed admin logins before lockout |
 | `REVIEW_RETENTION_DAYS` | `7` | Retention period for review-queue frames |
 | `TIMEZONE` | `UTC` | Timezone used for the attendance day |
+| `MIN_FACE_WIDTH` | `120` | Reject detected faces narrower than this many pixels |
+| `BLUR_THRESHOLD` | `100.0` | Reject face crops with a Laplacian variance below this value |
