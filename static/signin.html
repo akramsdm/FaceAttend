@@ -3,27 +3,66 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Face Attendance - Sign in</title>
+    <title>Face Attendance - Clock</title>
     <link rel="stylesheet" href="/static/signin.css" />
   </head>
   <body>
     <main class="kiosk" aria-labelledby="title">
       <header class="kiosk-header">
         <h1 id="title">Face Attendance</h1>
-        <p id="instruction" class="instruction">Look at the camera.</p>
+        <p id="instruction" class="instruction">Look at the camera to identify yourself.</p>
       </header>
 
-      <section class="camera-area" aria-label="Camera preview">
-        <div class="frame">
-          <video id="video" autoplay playsinline muted></video>
-          <div class="guide" aria-hidden="true"></div>
-          <p id="camera-placeholder" class="placeholder">Starting camera…</p>
+      <section id="scan-screen" class="screen" aria-label="Camera scan">
+        <div class="camera-area">
+          <div class="frame">
+            <video id="video" autoplay playsinline muted></video>
+            <div class="guide" aria-hidden="true"></div>
+            <p id="camera-placeholder" class="placeholder">Starting camera…</p>
+          </div>
+        </div>
+        <section id="status" class="status status-waiting" role="status" aria-live="polite" aria-atomic="true">
+          <p id="status-main" class="status-main">Waiting for a face</p>
+          <p id="status-sub" class="status-sub">Position your face inside the guide.</p>
+        </section>
+      </section>
+
+      <section id="confirm-screen" class="screen" hidden aria-labelledby="confirm-name">
+        <div class="panel">
+          <p id="confirm-name" class="big-name"></p>
+          <p id="confirm-shift" class="meta"></p>
+          <p id="confirm-time" class="meta"></p>
+          <p id="confirm-message" class="meta" role="status" aria-live="polite"></p>
+          <p id="countdown" class="countdown" aria-live="polite"></p>
+          <div class="actions">
+            <button id="btn-in" type="button" class="action-btn in">Clock in</button>
+            <button id="btn-out" type="button" class="action-btn out">Clock out</button>
+          </div>
+          <p id="btn-reason" class="meta small"></p>
+          <div id="early-confirm" class="confirm-box" hidden>
+            <p>Your shift has not ended yet. Clock out early?</p>
+            <div class="actions">
+              <button id="early-yes" type="button" class="action-btn out">Yes, clock out early</button>
+              <button id="early-no" type="button" class="action-btn secondary">Cancel</button>
+            </div>
+          </div>
+          <div id="blocked-box" class="confirm-box" hidden>
+            <button id="btn-request" type="button" class="action-btn secondary">Request approval</button>
+            <p class="meta small">If you need help, please contact reception.</p>
+          </div>
+          <p id="confirm-error" class="meta error" role="alert"></p>
         </div>
       </section>
 
-      <section id="status" class="status status-waiting" role="status" aria-live="polite" aria-atomic="true">
-        <p id="status-main" class="status-main">Waiting for a face</p>
-        <p id="status-sub" class="status-sub">Position your face inside the guide.</p>
+      <section id="result-screen" class="screen" hidden aria-live="polite">
+        <div class="panel">
+          <p id="result-main" class="big-name"></p>
+          <p id="result-sub" class="meta"></p>
+          <div class="actions">
+            <button id="btn-undo" type="button" class="action-btn secondary" hidden>Undo (<span id="undo-secs">10</span>s)</button>
+          </div>
+          <p id="result-note" class="meta small"></p>
+        </div>
       </section>
 
       <footer class="kiosk-footer">
