@@ -137,10 +137,13 @@ def test_export_csv_columns(
     assert r.status_code == 200
     assert "text/csv" in r.headers["content-type"]
     rows = list(csv.reader(io.StringIO(r.text)))
-    assert rows[0] == [
+    header = rows[0]
+    # Step J extends exports with shift fields (prefix preserved for compatibility)
+    assert header[:9] == [
         "id","staff_id","staff_code","staff_name","department","type",
-        "timestamp_utc","local_time","method","edited_by","edit_reason",
+        "timestamp_utc","local_time","method",
     ]
+    assert "shift_date" in header and "flag" in header and "edited_by" in header and "edit_reason" in header
     assert rows[1][2] == "S001"
     assert rows[1][5] == "in"
 
