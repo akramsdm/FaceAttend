@@ -100,6 +100,10 @@ python scripts/spike.py
 Press `e` to enrol the current face and `q` to quit. The spike prints detection and embedding
 timings per frame, plus the cosine similarity to the enrolled face.
 
+## Head-turn challenge (step 13, optional)
+
+The kiosk can request a random **left/right head turn** and send two frames; the backend uses YuNet landmarks (nose position relative to the eye midpoint) to confirm movement and rejects with outcome `spoof` otherwise. Enable/disable via admin **Settings → Head-turn liveness challenge** (`spoof_challenge`, default off). This helps stop a **still photo** but is **not certified anti-spoofing** and **may not stop a video** replay.
+
 ## Tests
 
 ```powershell

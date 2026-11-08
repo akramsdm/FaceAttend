@@ -3,7 +3,8 @@
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,7 @@ from app.db import get_session
 from app.models import Attendance, Staff, utcnow
 from app.recognition import GalleryCache, Recognizer
 from app.settings_store import get_value
+from app.spoof import confirm_head_turn
 
 router = APIRouter(tags=["signin"])
 
@@ -22,6 +24,7 @@ class SigninResponse(BaseModel):
     name: str | None = None
     action: Literal["in", "out"] | None = None
     time: datetime | None = None
+    challenge: Literal["left", "right"] | None = None
 
 
 def get_recognizer(request: Request) -> Recognizer:
@@ -57,10 +60,21 @@ def _eligible_staff(db: Session, staff_id: int | None) -> Staff | None:
     return staff
 
 
+def _iso(dt: datetime) -> str:
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _resp(payload: dict[str, object]) -> JSONResponse:
+    """Standard response keeps step-8 JSON shape (no `challenge` key)."""
+    return JSONResponse(payload)
+
+
 @router.post("/api/signin", response_model=SigninResponse)
 def sign_in(
     image: UploadFile = File(...),
     kiosk_id: str = Header(alias="X-Kiosk-ID", min_length=1, max_length=100),
+    challenge: str | None = Form(default=None),
+    challenge_image: UploadFile | None = File(default=None),
     db: Session = Depends(get_session),
     recognizer: Recognizer = Depends(get_recognizer),
     gallery: GalleryCache = Depends(get_gallery),
@@ -89,7 +103,7 @@ def sign_in(
             score=None,
         )
         db.commit()
-        return SigninResponse(status="invalid_image")
+        return _resp({"status":"invalid_image","name":None,"action":None,"time":None})
 
     if analysis.status != "ok" or analysis.face is None:
         status = "not_recognised" if analysis.status == "ok" else analysis.status
@@ -102,7 +116,7 @@ def sign_in(
             frame=analysis.frame,
         )
         db.commit()
-        return SigninResponse(status=status)
+        return _resp({"status":status,"name":None,"action":None,"time":None})
 
     try:
         embedding = recognizer.embed(analysis.frame, analysis.face)
@@ -115,7 +129,7 @@ def sign_in(
             frame=analysis.frame,
         )
         db.commit()
-        return SigninResponse(status="not_recognised")
+        return _resp({"status":"not_recognised","name":None,"action":None,"time":None})
 
     best_staff_id, best_score, second_score = gallery.match_embedding(embedding)
     decision = rules.decide(
@@ -130,6 +144,39 @@ def sign_in(
         decision = "rejected"
 
     if decision == "matched" and staff is not None:
+        # Optional head-turn challenge (anti-still-photo). Two-frame flow.
+        spoof_on = get_value(db, "spoof_challenge")
+        if spoof_on:
+            if challenge and challenge in ("left", "right") and challenge_image is not None:
+                chal_bytes = challenge_image.file.read()
+                try:
+                    chal_analysis = recognizer.analyse_frame(chal_bytes)
+                except ValueError:
+                    chal_analysis = None
+                if (
+                    chal_analysis is None
+                    or chal_analysis.status != "ok"
+                    or chal_analysis.landmarks is None
+                    or analysis.landmarks is None
+                    or not confirm_head_turn(analysis.landmarks, chal_analysis.landmarks, challenge)
+                ):
+                    signin.record_attempt(
+                        db,
+                        kiosk_id=kiosk,
+                        outcome="spoof",
+                        now=now,
+                        best_staff_id=staff.id,
+                        score=best_score,
+                        frame=analysis.frame,
+                    )
+                    db.commit()
+                    return _resp({"status":"spoof","name":None,"action":None,"time":None})
+                # passed challenge: fall through to record attendance
+            else:
+                import secrets as _secrets
+                direction = "left" if int.from_bytes(_secrets.token_bytes(1), "big") % 2 == 0 else "right"
+                return {"status":"challenge_required","name":None,"action":None,"time":None,"challenge":direction}
+
         recent = signin.attendance_within_cooldown(
             db, staff.id, now, cooldown_seconds
         )
@@ -143,12 +190,12 @@ def sign_in(
                 score=best_score,
             )
             db.commit()
-            return SigninResponse(
-                status="already_recorded",
-                name=staff.name,
-                action=recent.type,
-                time=signin.to_local_time(recent.timestamp, settings.timezone),
-            )
+            return _resp({
+                "status":"already_recorded",
+                "name":staff.name,
+                "action":recent.type,
+                "time":_iso(signin.to_local_time(recent.timestamp, settings.timezone)),
+            })
 
         action = signin.next_action(db, staff.id, now, settings.timezone)
         db.add(
@@ -170,12 +217,7 @@ def sign_in(
             score=best_score,
         )
         db.commit()
-        return SigninResponse(
-            status="ok",
-            name=staff.name,
-            action=action,
-            time=signin.to_local_time(now, settings.timezone),
-        )
+        return _resp({"status":"ok","name":staff.name,"action":action,"time":_iso(signin.to_local_time(now, settings.timezone))})
 
     attempt_outcome = "ambiguous" if decision == "ambiguous" else "rejected"
     signin.record_attempt(
@@ -189,6 +231,4 @@ def sign_in(
     )
     db.commit()
 
-    return SigninResponse(
-        status="ambiguous" if attempt_outcome == "ambiguous" else "not_recognised"
-    )
+    return _resp({"status":"ambiguous" if attempt_outcome == "ambiguous" else "not_recognised","name":None,"action":None,"time":None})

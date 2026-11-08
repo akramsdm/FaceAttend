@@ -62,6 +62,14 @@
             <input id="review_retention_days" name="review_retention_days" type="number" min="1" max="365" step="1" required />
             <p class="help">Temporary review-queue frames older than this are deleted at startup/cleanup; shorter retention improves privacy but reduces time to review.</p>
           </div>
+          <div class="field">
+            <label for="spoof_challenge">Head-turn liveness challenge</label>
+            <select id="spoof_challenge" name="spoof_challenge">
+              <option value="false">Off</option>
+              <option value="true">On</option>
+            </select>
+            <p class="help">When on, kiosk asks for a random left/right head turn (two frames) before recording a match. Helps stop a still photo but is not certified anti-spoofing and may not stop a video.</p>
+          </div>
           <p id="error" class="message error" role="alert"></p>
           <div class="button-row"><button class="button" type="submit">Save settings</button></div>
         </form>

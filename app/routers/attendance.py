@@ -261,6 +261,7 @@ def dashboard_summary(
     }
 
 
+@router.get("/export.csv")
 def export_csv(
     start: date | None = None,
     end: date | None = None,

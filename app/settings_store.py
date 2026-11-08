@@ -18,6 +18,7 @@ DEFINITIONS: dict[str, dict[str, Any]] = {
     "work_start": {"type": "time", "default": lambda s: s.work_start},
     "grace_minutes": {"type": int, "min": 0, "max": 720, "default": lambda s: s.grace_minutes},
     "review_retention_days": {"type": int, "min": 1, "max": 365, "default": lambda s: s.review_retention_days},
+    "spoof_challenge": {"type": bool, "default": lambda s: False},
 }
 
 
@@ -28,6 +29,10 @@ def _coerce(key: str, raw: str):
         v = float(raw)
     elif t is int:
         v = int(float(raw))
+    elif t is bool:
+        if isinstance(raw, bool):
+            return raw
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
     elif t == "time":
         parts = str(raw).strip().split(":")
         if len(parts) != 2:

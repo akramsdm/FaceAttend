@@ -22,6 +22,7 @@ class SettingsUpdate(BaseModel):
     work_start: str | None = None
     grace_minutes: int | None = None
     review_retention_days: int | None = None
+    spoof_challenge: bool | None = None
 
 
 @router.get("/settings")

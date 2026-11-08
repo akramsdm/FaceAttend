@@ -4,6 +4,7 @@
   var INTERVAL_MS = 1500;
   var RESULT_MS = 4000;
   var KIOSK_ID = "entrance-main";
+  var CHALLENGE_DELAY_MS = 900;
 
   var video = document.getElementById("video");
   var canvas = document.getElementById("capture-canvas");
@@ -19,53 +20,36 @@
   var resetId = null;
   var inFlight = false;
   var showingResult = false;
+  var challengeDir = null; // 'left'|'right'
+  var challengeFirst = null; // blob
 
   function setStatus(kind, main, sub) {
     statusEl.className = "status status-" + kind;
     mainEl.textContent = main || "";
     subEl.textContent = sub || "";
   }
-
   function formatTime(value) {
     if (!value) return "";
-    try {
-      return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    } catch (e) {
-      return String(value);
-    }
+    try { return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+    catch (e) { return String(value); }
   }
-
-  function actionLabel(action) {
-    return action === "out" ? "Signed out" : "Signed in";
-  }
-
-  function showWaiting() {
-    showingResult = false;
-    setStatus("waiting", "Waiting for a face", "Position your face inside the guide.");
-  }
-
-  function scheduleReset() {
-    window.clearTimeout(resetId);
-    resetId = window.setTimeout(showWaiting, RESULT_MS);
-  }
+  function actionLabel(action) { return action === "out" ? "Signed out" : "Signed in"; }
+  function showWaiting() { showingResult = false; challengeDir = null; challengeFirst = null; setStatus("waiting", "Waiting for a face", "Position your face inside the guide."); }
+  function scheduleReset() { window.clearTimeout(resetId); resetId = window.setTimeout(showWaiting, RESULT_MS); }
 
   function handlePayload(payload) {
     var status = payload && payload.status;
-    if (status === "ok") {
-      showingResult = true;
-      setStatus("ok", payload.name || "Recognised", actionLabel(payload.action) + " at " + formatTime(payload.time));
-      scheduleReset();
+    if (status === "challenge_required") {
+      challengeDir = payload.challenge === "left" ? "left" : "right";
+      challengeFirst = payload._firstBlob || null; // internal carry
+      if (!challengeFirst) { showWaiting(); return; }
+      setStatus("waiting", challengeDir === "left" ? "Turn your head LEFT" : "Turn your head RIGHT", "Hold briefly, then face forward.");
+      window.setTimeout(function(){ /* next scan will send pair */ }, CHALLENGE_DELAY_MS);
       return;
     }
-    if (status === "already_recorded") {
-      showingResult = true;
-      setStatus("warn", payload.name || "Already recorded", actionLabel(payload.action) + " already recorded at " + formatTime(payload.time));
-      scheduleReset();
-      return;
-    }
-
-    if (showingResult) return; // keep a successful/warn result visible until reset
-
+    if (status === "ok") { showingResult = true; setStatus("ok", payload.name || "Recognised", actionLabel(payload.action) + " at " + formatTime(payload.time)); scheduleReset(); return; }
+    if (status === "already_recorded") { showingResult = true; setStatus("warn", payload.name || "Already recorded", actionLabel(payload.action) + " already recorded at " + formatTime(payload.time)); scheduleReset(); return; }
+    if (showingResult) return;
     var messages = {
       no_face: ["No face detected", "Position your face inside the guide."],
       multiple_faces: ["More than one face detected", "Only one person should face the camera."],
@@ -73,105 +57,77 @@
       blurry: ["Image is blurry", "Hold still and face the camera."],
       not_recognised: ["Not recognised", "Try again, or sign in manually at reception."],
       ambiguous: ["Not recognised", "Try again, or sign in manually at reception."],
-      invalid_image: ["Could not read image", "Please try again."]
+      invalid_image: ["Could not read image", "Please try again."],
+      spoof: ["Liveness check failed", "Turn your head as asked, or sign in manually at reception."]
     };
     var msg = messages[status] || ["Not recognised", "Try again, or sign in manually at reception."];
     setStatus("error", msg[0], msg[1]);
   }
 
-  function handleServiceError() {
-    if (showingResult) return;
-    setStatus("error", "Service unavailable", "The sign-in service is not available. Please sign in manually at reception.");
-  }
+  function handleServiceError() { if (showingResult) return; setStatus("error", "Service unavailable", "The sign-in service is not available. Please sign in manually at reception."); }
 
   function captureBlob() {
     if (!stream || !video.videoWidth || !video.videoHeight) return Promise.resolve(null);
     var width = Math.min(video.videoWidth, 640);
     var height = Math.round(video.videoHeight * (width / video.videoWidth));
-    canvas.width = width;
-    canvas.height = height;
-    var ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, width, height);
-    return new Promise(function (resolve) {
-      canvas.toBlob(function (blob) { resolve(blob); }, "image/jpeg", 0.85);
-    });
+    canvas.width = width; canvas.height = height;
+    canvas.getContext("2d").drawImage(video, 0, 0, width, height);
+    return new Promise(function (resolve) { canvas.toBlob(function (blob) { resolve(blob); }, "image/jpeg", 0.85); });
+  }
+
+  function postForm(form) {
+    return fetch("/api/signin", { method: "POST", headers: { "X-Kiosk-ID": KIOSK_ID }, body: form })
+      .then(function (response) {
+        if (response.status === 503) { handleServiceError(); return null; }
+        return response.json().catch(function () { return null; });
+      });
   }
 
   function scan() {
     if (inFlight || showingResult || !stream) return;
     inFlight = true;
     captureBlob().then(function (blob) {
-      if (!blob) { inFlight = false; return null; }
-      var form = new FormData();
-      form.append("image", blob, "frame.jpg");
-      return fetch("/api/signin", {
-        method: "POST",
-        headers: { "X-Kiosk-ID": KIOSK_ID },
-        body: form
+      if (!blob) return null;
+      if (challengeDir && challengeFirst) {
+        var f2 = new FormData();
+        f2.append("image", challengeFirst, "frame1.jpg");
+        f2.append("challenge", challengeDir);
+        f2.append("challenge_image", blob, "frame2.jpg");
+        challengeDir = null; challengeFirst = null;
+        return postForm(f2);
+      }
+      var f = new FormData(); f.append("image", blob, "frame.jpg");
+      return postForm(f).then(function (payload) {
+        if (payload && payload.status === "challenge_required" && payload.challenge) {
+          challengeDir = payload.challenge; challengeFirst = blob;
+          setStatus("waiting", challengeDir === "left" ? "Turn your head LEFT" : "Turn your head RIGHT", "Hold briefly, then face forward.");
+          return null; // pair sent on next scan
+        }
+        return payload;
       });
-    }).then(function (response) {
-      if (!response) return null;
-      if (response.status === 503) { handleServiceError(); return null; }
-      return response.json().catch(function () { return null; });
-    }).then(function (payload) {
-      if (payload) handlePayload(payload);
-    }).catch(function () {
-      handleServiceError();
-    }).finally(function () {
-      inFlight = false;
-    });
+    }).then(function (payload) { if (payload) handlePayload(payload); })
+      .catch(function () { handleServiceError(); })
+      .finally(function () { inFlight = false; });
   }
 
-  function startScanning() {
-    if (timerId) return;
-    timerId = window.setInterval(scan, INTERVAL_MS);
-  }
-
+  function startScanning() { if (timerId) return; timerId = window.setInterval(scan, INTERVAL_MS); }
   function cameraErrorMessage(err) {
-    if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) {
-      return "Camera access is blocked. Allow camera permission in the browser.";
-    }
-    if (err && (err.name === "NotFoundError" || err.name === "DevicesNotFoundError")) {
-      return "No camera was found. Connect a camera and reload this page.";
-    }
-    if (err && (err.name === "NotReadableError" || err.name === "TrackStartError")) {
-      return "The camera is in use by another application.";
-    }
+    if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) return "Camera access is blocked. Allow camera permission in the browser.";
+    if (err && (err.name === "NotFoundError" || err.name === "DevicesNotFoundError")) return "No camera was found. Connect a camera and reload this page.";
+    if (err && (err.name === "NotReadableError" || err.name === "TrackStartError")) return "The camera is in use by another application.";
     return "The camera could not be started. Use localhost or HTTPS.";
   }
-
   function startCamera() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       placeholder.textContent = "Camera access is not available in this browser.";
-      setStatus("error", "Camera unavailable", "Use a current browser on localhost or HTTPS, or sign in manually at reception.");
-      return;
+      setStatus("error", "Camera unavailable", "Use a current browser on localhost or HTTPS, or sign in manually at reception."); return;
     }
     navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false })
-      .then(function (mediaStream) {
-        stream = mediaStream;
-        video.srcObject = mediaStream;
-        return video.play().catch(function () {});
-      })
-      .then(function () {
-        placeholder.hidden = true;
-        showWaiting();
-        startScanning();
-      })
-      .catch(function (err) {
-        placeholder.textContent = "Camera not available";
-        setStatus("error", "Camera blocked", cameraErrorMessage(err) + " Sign in manually at reception if needed.");
-      });
+      .then(function (mediaStream) { stream = mediaStream; video.srcObject = mediaStream; return video.play().catch(function () {}); })
+      .then(function () { placeholder.hidden = true; showWaiting(); startScanning(); })
+      .catch(function (err) { placeholder.textContent = "Camera not available"; setStatus("error", "Camera blocked", cameraErrorMessage(err) + " Sign in manually at reception if needed."); });
   }
-
-  manualLink.addEventListener("click", function (event) {
-    event.preventDefault();
-    manualHelp.hidden = !manualHelp.hidden;
-    if (!manualHelp.hidden) manualHelp.focus && manualHelp.focus();
-  });
-
-  window.addEventListener("beforeunload", function () {
-    if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
-  });
-
+  manualLink.addEventListener("click", function (event) { event.preventDefault(); manualHelp.hidden = !manualHelp.hidden; });
+  window.addEventListener("beforeunload", function () { if (stream) stream.getTracks().forEach(function (t) { t.stop(); }); });
   startCamera();
 })();
