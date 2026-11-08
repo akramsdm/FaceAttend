@@ -59,6 +59,15 @@
                   <video id="video" autoplay playsinline muted></video>
                   <div id="face-guide" class="face-guide waiting" aria-hidden="true"></div>
                   <div id="scan-line" class="scan-line" aria-hidden="true"></div>
+                  <div class="camera-top">
+                    <div id="feedback" class="feedback tone-neutral" role="status" aria-live="polite" aria-atomic="true">
+                      <span class="feedback-dot" aria-hidden="true"></span>
+                      <span id="feedback-text">Position your face inside the guide.</span>
+                    </div>
+                  </div>
+                  <div class="camera-bottom">
+                    <button id="btn-stop-scan" type="button" class="btn btn-neutral btn-stop">Cancel</button>
+                  </div>
                   <div id="camera-overlay" class="camera-overlay" hidden>
                     <div id="overlay-spinner" class="spinner" hidden aria-hidden="true"></div>
                     <p id="overlay-main"></p>
@@ -66,11 +75,6 @@
                   </div>
                 </div>
               </div>
-              <div id="feedback" class="feedback tone-neutral" role="status" aria-live="polite" aria-atomic="true">
-                <span class="feedback-dot" aria-hidden="true"></span>
-                <span id="feedback-text">Position your face inside the guide.</span>
-              </div>
-              <button id="btn-stop-scan" type="button" class="btn btn-neutral btn-stop">Cancel</button>
             </div>
           </div>
 

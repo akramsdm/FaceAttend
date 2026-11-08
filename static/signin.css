@@ -100,16 +100,26 @@ h1, h2, p { margin: 0; }
   padding: 32px 28px; text-align: center;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
 }
-.idle-panel[hidden], .scan-panel[hidden] { display: none; }
-.idle-icon { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; color: var(--accent); background: rgba(96,165,250,.12); border: 1px solid rgba(96,165,250,.28); }
-.idle-icon svg { width: 30px; height: 30px; }
-.idle-title { font-size: 22px; font-weight: 700; margin-top: 4px; }
-.idle-desc { font-size: 15px; color: var(--text-secondary); max-width: 420px; }
-.btn-start { display: inline-flex; align-items: center; gap: 10px; margin-top: 8px; padding: 12px 22px; font-size: 16px; }
-.btn-start svg { width: 20px; height: 20px; }
-.idle-note { font-size: 13px; color: var(--muted); }
-.scan-panel { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
-.btn-stop { font-size: 13px; padding: 8px 14px; color: var(--text-secondary); }
+.scan-panel { display: flex; flex-direction: column; align-items: center; width: 100%; }
+.scan-panel[hidden] { display: none; }
+.camera-top, .camera-bottom {
+  position: absolute; left: 0; right: 0; z-index: 3;
+  display: flex; justify-content: center; pointer-events: none;
+}
+.camera-top { top: 12px; padding: 0 12px; }
+.camera-bottom { bottom: 12px; padding: 0 12px; }
+.camera-top > *, .camera-bottom > * { pointer-events: auto; }
+.camera-top .feedback {
+  background: rgba(16,24,32,.72); border-color: rgba(51,65,85,.85);
+  backdrop-filter: blur(2px);
+}
+.camera-bottom .btn-stop {
+  font-size: 13px; padding: 7px 16px; color: var(--text-secondary);
+  background: rgba(25,42,58,.78); border-color: rgba(51,65,85,.85);
+  backdrop-filter: blur(2px);
+}
+.camera-bottom .btn-stop:hover:not(:disabled) { background: rgba(34,52,72,.88); color: var(--text); }
+.camera-overlay { z-index: 4; }
 
 .clock-card { text-align: center; gap: 6px; padding: 20px 16px; }
 .clock-welcome { font-size: 13px; font-weight: 600; color: var(--accent); letter-spacing: .01em; margin-bottom: 8px; }
