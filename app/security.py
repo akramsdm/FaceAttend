@@ -15,6 +15,9 @@ from app.config import get_settings
 from app.db import get_session
 from app.models import Admin, utcnow
 
+ROLE_ADMIN = "admin"
+ROLE_MANAGER = "manager"
+
 SESSION_COOKIE_NAME = "fa_session"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 
@@ -129,6 +132,48 @@ def require_admin(
     db: Session = Depends(get_session),
 ) -> Admin:
     return _admin_for(session, db)
+
+
+def require_role(*roles: str):
+    """Dependency factory: allow any of the given roles (admin/manager)."""
+    allowed = set(roles) or {ROLE_ADMIN, ROLE_MANAGER}
+
+    def _dep(
+        session: AdminSession = Depends(get_current_session),
+        db: Session = Depends(get_session),
+    ) -> Admin:
+        admin = _admin_for(session, db)
+        role = getattr(admin, "role", None) or ROLE_ADMIN
+        # admin always allowed; manager allowed when listed
+        if role == ROLE_ADMIN or role in allowed:
+            return admin
+        raise HTTPException(status_code=403, detail="Insufficient role")
+
+    return _dep
+
+
+def can_access_staff(admin: Admin, staff) -> bool:
+    role = getattr(admin, "role", None) or ROLE_ADMIN
+    if role == ROLE_ADMIN:
+        return True
+    if role == ROLE_MANAGER:
+        scope = getattr(admin, "department_scope", None)
+        if scope is None:
+            return False
+        staff_dept = getattr(staff, "department", None) if staff is not None else None
+        return staff_dept == scope
+    return False
+
+
+def scoped_staff_query(db: Session, admin: Admin):
+    from app.models import Staff
+
+    role = getattr(admin, "role", None) or ROLE_ADMIN
+    q = select(Staff).where(Staff.anonymised.is_(False))
+    if role == ROLE_MANAGER:
+        scope = getattr(admin, "department_scope", None)
+        q = q.where(Staff.department == scope)
+    return q
 
 
 def require_admin_csrf(

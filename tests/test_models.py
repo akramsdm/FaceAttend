@@ -216,5 +216,12 @@ def test_init_db_creates_all_tables(tmp_path, monkeypatch) -> None:
         "recognition_attempts",
         "audit_logs",
         "settings",
+        # Phase 2
+        "patterns",
+        "pattern_days",
+        "assignments",
+        "shift_exceptions",
+        "clock_tokens",
+        "approval_requests",
     }
     test_engine.dispose()

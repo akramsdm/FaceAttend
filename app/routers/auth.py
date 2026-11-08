@@ -34,6 +34,8 @@ class LoginRequest(BaseModel):
 class AdminInfo(BaseModel):
     id: int
     username: str
+    role: str = "admin"
+    department_scope: str | None = None
 
 
 class LoginResponse(BaseModel):
@@ -95,7 +97,7 @@ def login(
         path="/",
     )
     return LoginResponse(
-        admin=AdminInfo(id=admin.id, username=admin.username),
+        admin=AdminInfo(id=admin.id, username=admin.username, role=getattr(admin,"role",None) or "admin", department_scope=getattr(admin,"department_scope",None)),
         csrf_token=session.csrf_token,
     )
 
@@ -122,6 +124,6 @@ def me(
     session: AdminSession = Depends(get_current_session),
 ) -> dict[str, AdminInfo | str]:
     return {
-        "admin": AdminInfo(id=admin.id, username=admin.username),
+        "admin": AdminInfo(id=admin.id, username=admin.username, role=getattr(admin,"role",None) or "admin", department_scope=getattr(admin,"department_scope",None)),
         "csrf_token": session.csrf_token,
     }

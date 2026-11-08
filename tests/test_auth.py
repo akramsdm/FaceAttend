@@ -72,7 +72,9 @@ def test_correct_login_sets_cookie_and_writes_audit(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["admin"] == {"id": admin_id, "username": "alice"}
+    assert payload["admin"]["id"] == admin_id
+    assert payload["admin"]["username"] == "alice"
+    assert payload["admin"].get("role", "admin") == "admin"
     assert payload["csrf_token"]
 
     set_cookie = response.headers["set-cookie"]

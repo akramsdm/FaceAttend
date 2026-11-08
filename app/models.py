@@ -6,6 +6,7 @@ import numpy as np
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -13,6 +14,8 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    Time,
+    UniqueConstraint,
     delete,
 )
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
@@ -50,6 +53,8 @@ class Admin(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), default="admin", server_default="admin")
+    department_scope: Mapped[str | None] = mapped_column(String(100))
     failed_logins: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -122,9 +127,16 @@ class Attendance(Base):
     model_version: Mapped[str | None] = mapped_column(String(100))
     edited_by: Mapped[int | None] = mapped_column(ForeignKey("admins.id"), index=True)
     edit_reason: Mapped[str | None] = mapped_column(Text)
+    # Phase 2 (nullable for backward compatibility with existing rows/flows)
+    shift_id: Mapped[int | None] = mapped_column(ForeignKey("patterns.id"), index=True)
+    shift_date = mapped_column(Date, nullable=True)
+    flag: Mapped[str | None] = mapped_column(String(30))
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey("admins.id"), index=True)
+    undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     staff: Mapped[Staff] = relationship(back_populates="attendance")
-    editor: Mapped[Admin | None] = relationship()
+    editor: Mapped[Admin | None] = relationship(foreign_keys=[edited_by])
+    approver: Mapped[Admin | None] = relationship(foreign_keys=[approved_by])
 
 
 class RecognitionAttempt(Base):
@@ -190,3 +202,87 @@ def delete_staff_data(session: Session, staff_id: int) -> bool:
     staff.anonymised = True
     session.commit()
     return True
+
+
+# --- Phase 2: shifts / clock / approvals ---
+
+class Pattern(Base):
+    __tablename__ = "patterns"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), index=True)
+    owner_staff_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), index=True)
+    early_window_min: Mapped[int] = mapped_column(Integer, default=30)
+    grace_min: Mapped[int] = mapped_column(Integer, default=10)
+    break_min: Mapped[int] = mapped_column(Integer, default=0)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    days: Mapped[list["PatternDay"]] = relationship(
+        back_populates="pattern", cascade="all, delete-orphan"
+    )
+
+
+class PatternDay(Base):
+    __tablename__ = "pattern_days"
+    __table_args__ = (UniqueConstraint("pattern_id", "weekday", name="uq_pattern_weekday"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pattern_id: Mapped[int] = mapped_column(ForeignKey("patterns.id", ondelete="CASCADE"), index=True)
+    weekday: Mapped[int] = mapped_column(Integer)  # 0=Mon .. 6=Sun
+    start_time = mapped_column(Time, nullable=False)
+    end_time = mapped_column(Time, nullable=False)
+    overnight: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    pattern: Mapped[Pattern] = relationship(back_populates="days")
+
+
+class Assignment(Base):
+    __tablename__ = "assignments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    staff_id: Mapped[int] = mapped_column(ForeignKey("staff.id"), index=True)
+    pattern_id: Mapped[int] = mapped_column(ForeignKey("patterns.id"), index=True)
+    effective_from = mapped_column(Date, nullable=False)
+    effective_to = mapped_column(Date, nullable=True)  # null = current
+
+
+class ShiftException(Base):
+    __tablename__ = "shift_exceptions"
+    __table_args__ = (UniqueConstraint("staff_id", "date", name="uq_exception_staff_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    staff_id: Mapped[int] = mapped_column(ForeignKey("staff.id"), index=True)
+    date = mapped_column(Date, nullable=False)
+    kind: Mapped[str] = mapped_column(String(20))  # day_off | custom_hours
+    start_time = mapped_column(Time, nullable=True)
+    end_time = mapped_column(Time, nullable=True)
+    reason: Mapped[str] = mapped_column(Text)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("admins.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ClockToken(Base):
+    __tablename__ = "clock_tokens"
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    staff_id: Mapped[int] = mapped_column(ForeignKey("staff.id"), index=True)
+    kiosk_id: Mapped[str] = mapped_column(String(100), index=True)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ApprovalRequest(Base):
+    __tablename__ = "approval_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    staff_id: Mapped[int] = mapped_column(ForeignKey("staff.id"), index=True)
+    action: Mapped[str] = mapped_column(String(10))  # in | out
+    reason_code: Mapped[str] = mapped_column(String(30))  # no_shift|out_of_window|early_out
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    decided_by: Mapped[int | None] = mapped_column(ForeignKey("admins.id"), index=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_note: Mapped[str | None] = mapped_column(Text)

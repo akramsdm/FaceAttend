@@ -12,6 +12,7 @@ from app.routers.attendance import router as attendance_router
 from app.routers.auth import router as auth_router
 from app.routers.review import router as review_router
 from app.routers.settings import router as settings_router
+from app.routers.shifts import router as shifts_router
 from app.routers.signin import router as signin_router
 from app.routers.staff import router as staff_router
 from app.security import SessionStore
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Face Attendance System", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(staff_router)
+app.include_router(shifts_router)
 app.include_router(signin_router)
 app.include_router(attendance_router)
 app.include_router(review_router)
