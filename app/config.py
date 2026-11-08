@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 DEFAULT_SECRET_KEY = "dev-insecure-secret-key-change-me"
+_DEV_ENVS = {"development", "dev", "test", "testing", "local", ""}
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,8 @@ class Settings:
     session_cookie_secure: bool
     work_start: str
     grace_minutes: int
+    max_upload_bytes: int
+    app_env: str
 
 
 def _env(name: str, default: str) -> str:
@@ -35,9 +38,16 @@ def _env_bool(name: str, default: str = "false") -> bool:
 
 @lru_cache
 def get_settings() -> Settings:
+    app_env = _env("APP_ENV", "development").strip().lower()
+    secret_key = _env("SECRET_KEY", DEFAULT_SECRET_KEY)
+    if secret_key == DEFAULT_SECRET_KEY and app_env not in _DEV_ENVS:
+        raise RuntimeError(
+            "SECRET_KEY must be set to a non-default value outside development "
+            "(set APP_ENV=development for local use)."
+        )
     return Settings(
         database_url=_env("DATABASE_URL", "sqlite:///./attendance.db"),
-        secret_key=_env("SECRET_KEY", DEFAULT_SECRET_KEY),
+        secret_key=secret_key,
         match_threshold=float(_env("MATCH_THRESHOLD", "0.363")),
         ambiguity_margin=float(_env("AMBIGUITY_MARGIN", "0.05")),
         cooldown_seconds=int(_env("COOLDOWN_SECONDS", "60")),
@@ -51,4 +61,6 @@ def get_settings() -> Settings:
         session_cookie_secure=_env_bool("SESSION_COOKIE_SECURE"),
         work_start=_env("WORK_START", "09:00"),
         grace_minutes=int(_env("GRACE_MINUTES", "15")),
+        max_upload_bytes=int(_env("MAX_UPLOAD_BYTES", "5242880")),
+        app_env=app_env,
     )

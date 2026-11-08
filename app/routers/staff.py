@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audit import record_audit
+from app.config import get_settings
 from app.db import get_session
 from app.models import Admin, Consent, FaceEmbedding, Staff, delete_staff_data
 from app.recognition import MODEL_NAME, MODEL_VERSION, GalleryCache, Recognizer
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/api/admin/staff", tags=["staff"])
 CONSENT_TEXT_VERSION = "v1"
 MIN_IMAGES = 3
 MAX_IMAGES = 5
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 REJECTION_REASONS = {
     "no_face": "No face detected.",
@@ -309,10 +311,21 @@ def enrol_staff(
 
     results: list[ImageResult] = []
     embeddings: list[np.ndarray] = []
+    max_bytes = getattr(get_settings(), "max_upload_bytes", MAX_IMAGE_BYTES)
 
     for image in images:
         filename = image.filename or "unnamed"
         image_bytes = image.file.read()
+        if len(image_bytes) > max_bytes:
+            results.append(
+                ImageResult(
+                    filename=filename,
+                    accepted=False,
+                    status="too_large",
+                    reason="Image exceeds the upload size limit.",
+                )
+            )
+            continue
         try:
             analysis = recognizer.analyse_frame(image_bytes)
         except ValueError:

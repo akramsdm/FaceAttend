@@ -16,6 +16,8 @@ from app.recognition import GalleryCache, Recognizer
 from app.settings_store import get_value
 from app.spoof import confirm_head_turn
 
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
 router = APIRouter(tags=["signin"])
 
 
@@ -91,6 +93,9 @@ def sign_in(
 
 
     image_bytes = image.file.read()
+    max_bytes = getattr(settings, "max_upload_bytes", MAX_IMAGE_BYTES)
+    if len(image_bytes) > max_bytes:
+        return _resp({"status": "invalid_image", "name": None, "action": None, "time": None})
 
     try:
         analysis = recognizer.analyse_frame(image_bytes)
@@ -149,10 +154,14 @@ def sign_in(
         if spoof_on:
             if challenge and challenge in ("left", "right") and challenge_image is not None:
                 chal_bytes = challenge_image.file.read()
-                try:
-                    chal_analysis = recognizer.analyse_frame(chal_bytes)
-                except ValueError:
+                max_bytes = getattr(settings, "max_upload_bytes", MAX_IMAGE_BYTES)
+                if len(chal_bytes) > max_bytes:
                     chal_analysis = None
+                else:
+                    try:
+                        chal_analysis = recognizer.analyse_frame(chal_bytes)
+                    except ValueError:
+                        chal_analysis = None
                 if (
                     chal_analysis is None
                     or chal_analysis.status != "ok"

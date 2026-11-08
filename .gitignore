@@ -2,6 +2,7 @@
 *.db
 models/*.onnx
 eval_data/
+eval_results/
 var/
 
 __pycache__/
