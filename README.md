@@ -27,6 +27,18 @@ uvicorn app.main:app --reload
 
 Health check: <http://localhost:8000/health> returns `{"status": "ok"}`.
 
+## Recognition spike
+
+Download the pre-trained ONNX models (ignored by git), then run the standalone webcam check:
+
+```powershell
+python scripts/download_models.py
+python scripts/spike.py
+```
+
+Press `e` to enrol the current face and `q` to quit. The spike prints detection and embedding
+timings per frame, plus the cosine similarity to the enrolled face.
+
 ## Tests
 
 ```powershell
