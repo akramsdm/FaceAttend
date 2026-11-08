@@ -20,6 +20,8 @@ class Settings:
     session_timeout_minutes: int
     lockout_minutes: int
     session_cookie_secure: bool
+    work_start: str
+    grace_minutes: int
 
 
 def _env(name: str, default: str) -> str:
@@ -47,4 +49,6 @@ def get_settings() -> Settings:
         session_timeout_minutes=int(_env("SESSION_TIMEOUT_MINUTES", "30")),
         lockout_minutes=int(_env("LOCKOUT_MINUTES", "5")),
         session_cookie_secure=_env_bool("SESSION_COOKIE_SECURE"),
+        work_start=_env("WORK_START", "09:00"),
+        grace_minutes=int(_env("GRACE_MINUTES", "15")),
     )
