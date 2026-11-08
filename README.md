@@ -71,6 +71,23 @@ Re-enrolling replaces the previous embeddings and records a new consent row (`v1
 Uploaded images are only read in memory and are never saved. The staff gallery cache is refreshed
 after enrolment, deactivation, reactivation and deletion.
 
+## Admin interface
+
+The plain HTML/JS admin pages are served from `/admin/`:
+
+| Page | URL |
+| --- | --- |
+| Sign in | <http://localhost:8000/admin/login.html> |
+| Staff list | <http://localhost:8000/admin/> |
+| Face enrolment | <http://localhost:8000/admin/enrol.html> |
+
+Sign in, then use the Staff page to search, add, edit, deactivate or delete staff and to see each
+person's enrolment status. The enrolment page uses the browser webcam, records the visible consent
+checkbox (wording version `v1`), captures four frames with a three-second countdown, shows the
+accept/reject result for each frame and offers a retake. The API session and CSRF token are handled
+by `static/admin/js/common.js`; an expired session or invalid CSRF token redirects to the sign-in
+page. Camera access requires `localhost` or HTTPS.
+
 ## Recognition spike
 
 Download the pre-trained ONNX models (ignored by git), then run the standalone webcam check:

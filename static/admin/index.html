@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Staff - Face Attendance</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <div class="inner">
+        <p class="site-title">Face Attendance</p>
+        <nav class="site-nav" aria-label="Admin sections">
+          <a href="index.html" aria-current="page">Staff</a>
+          <a href="enrol.html">Enrolment</a>
+        </nav>
+        <div class="header-right">
+          <span>Signed in as <span class="admin-name" data-admin-name>admin</span></span>
+          <button class="button secondary" type="button" data-logout>Sign out</button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main" class="page">
+      <div class="page-head">
+        <div>
+          <h1>Staff</h1>
+          <p>
+            Search staff, manage details and consent, and open the enrolment page
+            to capture face frames. Deactivating keeps attendance history.
+          </p>
+        </div>
+        <button id="add-staff" class="button" type="button">Add staff</button>
+      </div>
+
+      <p id="staff-message" class="message" role="status" aria-live="polite"></p>
+
+      <section id="staff-editor" class="panel" aria-labelledby="editor-title" hidden>
+        <h2 id="editor-title">Add staff</h2>
+        <form id="staff-form" novalidate>
+          <input id="staff-id" name="staff_id" type="hidden" value="" />
+
+          <div class="field">
+            <label for="staff-code">Staff code (required)</label>
+            <input
+              id="staff-code"
+              name="staff_code"
+              type="text"
+              maxlength="50"
+              autocomplete="off"
+              required
+            />
+          </div>
+
+          <div class="field">
+            <label for="staff-name">Full name (required)</label>
+            <input
+              id="staff-name"
+              name="name"
+              type="text"
+              maxlength="200"
+              autocomplete="off"
+              required
+            />
+          </div>
+
+          <div class="field">
+            <label for="staff-department">Department (optional)</label>
+            <input
+              id="staff-department"
+              name="department"
+              type="text"
+              maxlength="100"
+              autocomplete="off"
+            />
+          </div>
+
+          <div class="field">
+            <label for="staff-shift">Shift (optional)</label>
+            <input
+              id="staff-shift"
+              name="shift"
+              type="text"
+              maxlength="50"
+              autocomplete="off"
+            />
+          </div>
+
+          <div class="field" id="staff-active-field" hidden>
+            <span class="label">Active status</span>
+            <div class="checkbox-row">
+              <input id="staff-active" name="active" type="checkbox" checked />
+              <label for="staff-active">Active (included in face recognition)</label>
+            </div>
+          </div>
+
+          <p id="editor-error" class="message error" role="alert" aria-live="assertive"></p>
+
+          <div class="button-row">
+            <button id="save-staff" class="button" type="submit">Save staff</button>
+            <button id="cancel-edit" class="button secondary" type="button">
+              Cancel
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel" aria-labelledby="staff-list-title">
+        <h2 id="staff-list-title">Staff list</h2>
+
+        <div class="toolbar">
+          <form id="search-form" class="toolbar" role="search" aria-label="Search staff">
+            <div class="field">
+              <label for="search-query">Search by code, name or department</label>
+              <input id="search-query" name="q" type="search" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="active-filter">Active status</label>
+              <select id="active-filter" name="active">
+                <option value="">All staff</option>
+                <option value="true">Active only</option>
+                <option value="false">Inactive only</option>
+              </select>
+            </div>
+            <button class="button secondary" type="submit">Search</button>
+          </form>
+        </div>
+
+        <p class="muted small" data-count aria-live="polite">Loading...</p>
+
+        <div class="table-wrap">
+          <table>
+            <caption>
+              Staff records, active status and face enrolment status.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Staff code</th>
+                <th scope="col">Name</th>
+                <th scope="col">Department</th>
+                <th scope="col">Shift</th>
+                <th scope="col">Active</th>
+                <th scope="col">Enrolment</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="staff-rows">
+              <tr>
+                <td colspan="7">Loading staff...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="js/common.js"></script>
+    <script src="js/staff.js"></script>
+  </body>
+</html>

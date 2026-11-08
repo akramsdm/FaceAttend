@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Enrol faces - Face Attendance</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <div class="inner">
+        <p class="site-title">Face Attendance</p>
+        <nav class="site-nav" aria-label="Admin sections">
+          <a href="index.html">Staff</a>
+          <a href="enrol.html" aria-current="page">Enrolment</a>
+        </nav>
+        <div class="header-right">
+          <span>Signed in as <span class="admin-name" data-admin-name>admin</span></span>
+          <button class="button secondary" type="button" data-logout>Sign out</button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main" class="page">
+      <div class="page-head">
+        <div>
+          <h1>Enrol faces</h1>
+          <p>
+            Capture 4 frames of the staff member's face. Each frame is checked
+            for one clear face before its embedding is stored. Photos are never
+            saved.
+          </p>
+        </div>
+      </div>
+
+      <p id="page-message" class="message" role="status" aria-live="polite"></p>
+
+      <section id="picker-section" class="panel picker" aria-labelledby="picker-title" hidden>
+        <h2 id="picker-title">Choose a staff member</h2>
+        <form id="picker-form">
+          <div class="field">
+            <label for="staff-select">Active staff member</label>
+            <select id="staff-select" required>
+              <option value="">Loading staff...</option>
+            </select>
+          </div>
+          <div class="button-row">
+            <button id="open-enrolment" class="button" type="submit">
+              Open enrolment page
+            </button>
+          </div>
+        </form>
+        <p class="small muted">
+          No suitable staff member? <a href="index.html">Add or reactivate staff</a>.
+        </p>
+      </section>
+
+      <section id="staff-section" class="panel" aria-labelledby="staff-title" hidden>
+        <div class="page-head">
+          <div>
+            <h2 id="staff-title">
+              Enrolling: <span id="summary-name">staff member</span>
+            </h2>
+            <p class="muted">Check the record before recording consent.</p>
+          </div>
+          <a class="button secondary" href="index.html">Back to staff</a>
+        </div>
+
+        <dl class="staff-summary">
+          <div>
+            <dt>Staff code</dt>
+            <dd id="summary-code">-</dd>
+          </div>
+          <div>
+            <dt>Department</dt>
+            <dd id="summary-department">-</dd>
+          </div>
+          <div>
+            <dt>Shift</dt>
+            <dd id="summary-shift">-</dd>
+          </div>
+          <div>
+            <dt>Active status</dt>
+            <dd id="summary-active">-</dd>
+          </div>
+          <div>
+            <dt>Enrolment status</dt>
+            <dd id="summary-enrolment">-</dd>
+          </div>
+        </dl>
+
+        <p id="staff-warning" class="message error" hidden></p>
+      </section>
+
+      <section id="consent-section" class="panel" aria-labelledby="consent-title" hidden>
+        <h2 id="consent-title">Consent</h2>
+        <div class="consent-details">
+          <p>
+            By enrolling this staff member, you confirm that they have been
+            shown the notice that face recognition is used for attendance, have
+            been briefed on how their face data is used, and consent to face
+            enrolment.
+          </p>
+          <p>
+            Only mathematical face embeddings are stored for recognition. The
+            captured images are not saved. The embeddings and consent record can
+            be deleted on request.
+          </p>
+        </div>
+
+        <div class="checkbox-row">
+          <input id="consent" name="consent" type="checkbox" />
+          <label for="consent">
+            I have shown and explained the notice above, and this staff member
+            has given their consent to face enrolment.
+          </label>
+        </div>
+        <p class="small muted">
+          Consent wording version: <strong>v1</strong>. The time and the signed-in
+          admin are recorded with the enrolment. Capture stays blocked until this
+          box is ticked.
+        </p>
+      </section>
+
+      <section id="camera-section" class="panel" aria-labelledby="camera-title" hidden>
+        <h2 id="camera-title">Capture 4 frames</h2>
+        <p>
+          Ask the staff member to face the camera in even light, with one face
+          visible and no other people in the frame.
+        </p>
+
+        <p id="camera-message" class="message" role="status" aria-live="polite"></p>
+
+        <div class="camera-layout">
+          <div>
+            <div class="camera-frame">
+              <video
+                id="camera"
+                autoplay
+                playsinline
+                muted
+                aria-label="Live camera preview"
+              ></video>
+              <div class="guide" aria-hidden="true"></div>
+              <div id="camera-placeholder" class="camera-placeholder">
+                Camera is off. Select "Start camera" and allow camera access.
+              </div>
+              <div
+                id="countdown"
+                class="countdown"
+                role="status"
+                aria-live="assertive"
+                hidden
+              ></div>
+            </div>
+
+            <div class="button-row">
+              <button id="start-camera" class="button secondary" type="button">
+                Start camera
+              </button>
+              <button id="capture" class="button" type="button" disabled>
+                Capture 4 frames
+              </button>
+              <button
+                id="cancel-capture"
+                class="button secondary"
+                type="button"
+                hidden
+              >
+                Cancel capture
+              </button>
+            </div>
+            <p class="small muted">
+              There is a three-second countdown before each frame. You can cancel
+              the countdown and retake all four frames.
+            </p>
+          </div>
+
+          <div>
+            <h3>Captured frames</h3>
+            <p id="slots-message" class="small muted" aria-live="polite">
+              No frames captured yet.
+            </p>
+
+            <ol class="slot-list" id="slots">
+              <li data-slot="0">
+                <img class="slot-thumb" alt="" hidden />
+                <div>
+                  <span class="slot-name">Frame 1</span>
+                  <span class="slot-status" data-slot-status>Not captured</span>
+                </div>
+              </li>
+              <li data-slot="1">
+                <img class="slot-thumb" alt="" hidden />
+                <div>
+                  <span class="slot-name">Frame 2</span>
+                  <span class="slot-status" data-slot-status>Not captured</span>
+                </div>
+              </li>
+              <li data-slot="2">
+                <img class="slot-thumb" alt="" hidden />
+                <div>
+                  <span class="slot-name">Frame 3</span>
+                  <span class="slot-status" data-slot-status>Not captured</span>
+                </div>
+              </li>
+              <li data-slot="3">
+                <img class="slot-thumb" alt="" hidden />
+                <div>
+                  <span class="slot-name">Frame 4</span>
+                  <span class="slot-status" data-slot-status>Not captured</span>
+                </div>
+              </li>
+            </ol>
+
+            <div class="button-row">
+              <button id="submit-enrolment" class="button" type="button" disabled>
+                Submit for enrolment
+              </button>
+              <button id="retake" class="button secondary" type="button" disabled>
+                Retake
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="js/common.js"></script>
+    <script src="js/enrol.js"></script>
+  </body>
+</html>

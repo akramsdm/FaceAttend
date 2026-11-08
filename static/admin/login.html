@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Admin sign in - Face Attendance</title>
+    <link rel="stylesheet" href="css/admin.css" />
+  </head>
+  <body>
+    <main id="main" class="login-layout">
+      <section class="login-card" aria-labelledby="login-title">
+        <h1 id="login-title">Admin sign in</h1>
+        <p class="subtitle">Face Attendance management</p>
+
+        <p id="login-error" class="message error" role="alert" aria-live="assertive"></p>
+
+        <form id="login-form" novalidate>
+          <div class="field">
+            <label for="username">Username</label>
+            <input
+              id="username"
+              name="username"
+              type="text"
+              autocomplete="username"
+              autocapitalize="none"
+              spellcheck="false"
+              required
+            />
+          </div>
+
+          <div class="field">
+            <label for="password">Password</label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              required
+            />
+          </div>
+
+          <div class="button-row">
+            <button id="login-submit" class="button" type="submit">Sign in</button>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <script src="js/common.js"></script>
+    <script src="js/login.js"></script>
+  </body>
+</html>
