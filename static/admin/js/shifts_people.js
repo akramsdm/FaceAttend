@@ -90,6 +90,11 @@
     $("b-schedule").innerHTML = bopts || '<option value="">No schedules</option>';
   }
 
+  function reloadPatterns(list) {
+    state.patterns = list || state.patterns;
+    populateScheduleFilters();
+  }
+
   async function loadPatterns() {
     var r = await FA.request("/api/admin/shifts/patterns");
     state.patterns = r.ok ? await r.json() : [];
@@ -123,35 +128,13 @@
   }
   function hidePanel() { $("row-action-panel").hidden = true; $("row-action-body").innerHTML = ""; }
 
-  function dayCell(wd, d) {
-    var en = d && d.enabled ? "checked" : (d ? "" : (wd < 5 ? "checked" : ""));
-    var st = d ? (d.start_time || "08:00") : "08:00";
-    var et = d ? (d.end_time || "17:00") : "17:00";
-    var ov = d && d.overnight ? "checked" : "";
-    return '<div class="day-cell"><h4>' + DAYS[wd] + '</h4>' +
-      '<label><input type="checkbox" data-wd="' + wd + '" data-f="enabled" ' + en + '> Working day</label>' +
-      '<label>Start <input type="time" data-wd="' + wd + '" data-f="start_time" value="' + esc(String(st).slice(0,5)) + '"></label>' +
-      '<label>End <input type="time" data-wd="' + wd + '" data-f="end_time" value="' + esc(String(et).slice(0,5)) + '"></label>' +
-      '<label><input type="checkbox" data-wd="' + wd + '" data-f="overnight" ' + ov + '> Ends next day</label></div>';
-  }
-  function readDayGrid(root) {
-    var days = [];
-    for (var wd = 0; wd < 7; wd++) {
-      function q(f) { return root.querySelector('[data-wd="' + wd + '"][data-f="' + f + '"]'); }
-      var en = q("enabled").checked;
-      days.push({ weekday: wd, enabled: en, start_time: q("start_time").value || "08:00", end_time: q("end_time").value || "17:00", overnight: q("overnight").checked });
-    }
-    return days;
-  }
-
   async function openEditWeek(person) {
-    // prefill from resolved week if available, else fetch resolved; keep it simple: fetch patterns list not enough - use resolved endpoint for week
+    // prefill from resolved week
     var ws = $("f-week").value || state.weekStart;
     var end = new Date(ws + "T00:00:00"); end.setDate(end.getDate() + 6); var we = end.toISOString().slice(0, 10);
     var rr = await FA.request("/api/admin/shifts/staff/" + person.id + "/resolved?start=" + ws + "&end=" + we);
     if (!rr.ok) { msg(await FA.readError(rr), "error"); return; }
     var resolved = (await rr.json()).items || [];
-    // build day defaults: if shift present use its start/end (overnight if end date != start date)
     var dayDefaults = [];
     for (var i = 0; i < 7; i++) {
       var it = resolved[i]; var sh = it && it.shift;
@@ -160,7 +143,6 @@
       var en = (sh.end || "").slice(11, 16) || "17:00";
       dayDefaults.push({ weekday: i, enabled: true, start_time: st, end_time: en, overnight: !!sh.overnight });
     }
-    // find a base/shared pattern id to compare against (use current label match)
     var baseId = ""; state.patterns.forEach(function (p) { if (p.name === person.schedule_label || (person.based_on && p.name === person.based_on)) baseId = String(p.id); });
     var baseOpts = state.patterns.map(function (p) { return '<option value="' + p.id + '"' + (String(p.id)===baseId?" selected":"") + '>' + esc(p.name) + '</option>'; }).join("");
     var html = '<h3>Edit week — ' + esc(person.name) + '</h3>' +
@@ -170,12 +152,7 @@
       '<div class="field"><label for="ew-base">Compare to schedule</label><select id="ew-base">' + baseOpts + '</select></div>' +
       '<div class="field"><label for="ew-from">Start date</label><input id="ew-from" type="date" value="' + esc(todayIso()) + '"></div>' +
       '</div>' +
-      '<details class="advanced"><summary>Advanced</summary><div class="toolbar">' +
-      '<div class="field"><label for="ew-early">Clock-in opens (minutes before start)</label><input id="ew-early" type="number" min="0" max="240" value="30"></div>' +
-      '<div class="field"><label for="ew-grace">Counts as late after (minutes)</label><input id="ew-grace" type="number" min="0" max="240" value="10"></div>' +
-      '<div class="field"><label for="ew-break">Break (minutes)</label><input id="ew-break" type="number" min="0" max="480" value="0"></div>' +
-      '</div></details>' +
-      '<div class="day-grid" id="ew-grid">' + dayDefaults.map(function (d, i) { return dayCell(i, d); }).join("") + '</div>' +
+      '<div id="ew-editor-host"></div>' +
       '<p id="ew-error" class="message error" role="alert"></p>' +
       '<div id="ew-preview" class="message info" aria-live="polite"></div>' +
       '<div class="button-row">' +
@@ -185,6 +162,9 @@
       '<button class="button secondary" type="button" id="ew-cancel">Close</button>' +
       '</div></form>';
     showPanel(html, "ew-base");
+    // reuse week editor component (presets, copy Monday, ends-next-day auto, Advanced defaults)
+    var host = $("ew-editor-host");
+    if (window.FAWeekEditor) window.FAWeekEditor.mount(host, { prefix: "ew", days: dayDefaults, windows: { early_window_min:30, grace_min:10, break_min:0 } });
     $("ew-cancel").onclick = hidePanel;
     async function doPreview() {
       setErr("ew-error", "");
@@ -198,12 +178,13 @@
       $("ew-save").disabled = false;
     }
     function weekPayload() {
+      var w = window.FAWeekEditor ? window.FAWeekEditor.read(host) : { days: [], early_window_min:30, grace_min:10, break_min:0 };
       return {
         pattern_id: Number($("ew-base").value) || null,
-        days: readDayGrid($("ew-grid")),
-        early_window_min: Number($("ew-early").value),
-        grace_min: Number($("ew-grace").value),
-        break_min: Number($("ew-break").value),
+        days: w.days,
+        early_window_min: w.early_window_min,
+        grace_min: w.grace_min,
+        break_min: w.break_min,
         effective_from: $("ew-from").value || todayIso()
       };
     }
@@ -218,7 +199,6 @@
     };
     $("ew-reset").onclick = async function () {
       setErr("ew-error", "");
-      // reset = assign base effective today via save of identical? easiest: save with dry-run of base - but base days unknown here. Use assign endpoint to base.
       var base = Number($("ew-base").value);
       if (!base) { setErr("ew-error", "Choose a base schedule."); return; }
       var r = await FA.request("/api/admin/shifts/assignments", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ pattern_id: base, staff_ids:[person.id], effective_from: $("ew-from").value || todayIso() }) });
@@ -373,7 +353,10 @@
     await loadPeople();
     wireBulk(); wireHoliday();
     $("filters-form").addEventListener("submit", function (ev) { ev.preventDefault(); loadPeople(); });
+    if (window.FASchedulesTab && window.FASchedulesTab.init) window.FASchedulesTab.init();
   }
+
+  window.FAShiftsPeople = { reloadPatterns: reloadPatterns, loadPeople: loadPeople };
 
   document.addEventListener("DOMContentLoaded", function () { boot().catch(function (e) { msg(e.message, "error"); }); });
 })();

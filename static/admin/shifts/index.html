@@ -29,6 +29,13 @@
       .day-cell input[type="time"], .day-cell input[type="text"] { width:100%; }
       .history-item { border-bottom:1px solid var(--line); padding:.4rem 0; }
       .history-item:last-child { border-bottom:0; }
+      .schedule-cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(16rem, 1fr)); gap:1rem; }
+      .schedule-card { border:1px solid var(--line); border-radius:8px; padding:1rem; background:#fbfcfe; }
+      .schedule-card h3 { margin:0 0 .25rem; font-size:1.05rem; }
+      .schedule-card p { margin:.15rem 0; }
+      .schedule-meta { color:var(--muted); font-size:.92rem; }
+      .editor-shell { border:1px solid var(--line); border-radius:8px; padding:1rem; background:#fff; margin-top:.75rem; }
+
     </style>
   </head>
   <body>
@@ -149,14 +156,34 @@
       </section>
 
       <section id="panel-schedules" class="tab-panel" role="tabpanel" aria-labelledby="tab-schedules" hidden>
-        <section class="panel">
-          <h2>Schedules</h2>
-          <p class="muted">Shared schedule templates (Step I). Personal copies do not appear here. Use the Patterns and week editor on this tab once Step I is applied.</p>
-          <p><a class="button secondary" href="assign.html">Assign (legacy)</a> <a class="button secondary" href="exceptions.html">Day changes (legacy)</a> <a class="button secondary" href="preview.html">Preview week (legacy)</a></p>
+        <section class="panel" aria-labelledby="sched-title">
+          <div class="page-head" style="margin-bottom:.5rem">
+            <h2 id="sched-title">Schedules</h2>
+            <button class="button" type="button" id="sch-new-btn">New schedule</button>
+          </div>
+          <p class="help">Shared schedule templates. Personal copies never appear here. Delete is disabled while a schedule is in use.</p>
+          <div id="sched-cards" class="schedule-cards" aria-live="polite"><p class="muted">Loading…</p></div>
+          <div id="sch-editor" class="editor-shell" hidden>
+            <h3 id="sch-editor-title">New schedule</h3>
+            <form id="sch-form" novalidate>
+              <input type="hidden" id="sch-id" value="" />
+              <div class="field" style="max-width:22rem"><label for="sch-name">Schedule name</label><input id="sch-name" type="text" maxlength="100" required /></div>
+              <div id="sch-editor-host"></div>
+              <p id="sch-error" class="message error" role="alert"></p>
+              <div class="button-row">
+                <button class="button" type="submit" id="sch-save">Save schedule</button>
+                <button class="button secondary" type="button" id="sch-cancel">Cancel</button>
+              </div>
+            </form>
+          </div>
         </section>
       </section>
+
     </main>
     <script src="../js/common.js"></script>
+    <script src="../js/shifts_week_editor.js"></script>
+    <script src="../js/shifts_schedules.js"></script>
     <script src="../js/shifts_people.js"></script>
   </body>
+
 </html>

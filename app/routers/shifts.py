@@ -73,6 +73,7 @@ class PatternOut(BaseModel):
     kind: Optional[str] = None
     based_on_pattern_id: Optional[int] = None
     archived_at: Optional[str] = None
+    used_by: int = 0
     days: list[dict]
 
 
@@ -117,7 +118,7 @@ def _is_admin(admin: Admin) -> bool:
     return _role(admin) == ROLE_ADMIN
 
 
-def _pattern_to_dict(p: Pattern) -> dict:
+def _pattern_to_dict(p: Pattern, used_by: int | None = None) -> dict:
     return {
         "id": p.id, "name": p.name, "owner_staff_id": p.owner_staff_id,
         "early_window_min": p.early_window_min, "grace_min": p.grace_min,
@@ -125,6 +126,7 @@ def _pattern_to_dict(p: Pattern) -> dict:
         "kind": getattr(p, "kind", "shared" if p.owner_staff_id is None else "personal"),
         "based_on_pattern_id": getattr(p, "based_on_pattern_id", None),
         "archived_at": p.archived_at.isoformat() if getattr(p, "archived_at", None) else None,
+        "used_by": int(used_by or 0),
         "days": [{"weekday": d.weekday, "start_time": d.start_time.strftime("%H:%M"),
                   "end_time": d.end_time.strftime("%H:%M"), "overnight": d.overnight,
                   "enabled": d.enabled} for d in sorted(p.days, key=lambda x: x.weekday)],
@@ -296,7 +298,19 @@ def list_patterns(
         .where(Pattern.kind == "shared", Pattern.archived_at.is_(None))
         .order_by(Pattern.is_default.desc(), Pattern.name)
     ).all()
-    return [_pattern_to_dict(p) for p in pats]
+    today = date_t.today()
+    used: dict[int, int] = {}
+    if pats:
+        rows = db.execute(
+            select(Assignment.pattern_id, func.count(func.distinct(Assignment.staff_id)))
+            .where(
+                Assignment.pattern_id.in_([p.id for p in pats]),
+                (Assignment.effective_to.is_(None)) | (Assignment.effective_to >= today),
+            )
+            .group_by(Assignment.pattern_id)
+        ).all()
+        used = {int(pid): int(n or 0) for pid, n in rows}
+    return [_pattern_to_dict(p, used_by=used.get(p.id, 0)) for p in pats]
 
 
 
