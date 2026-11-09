@@ -4,8 +4,9 @@ from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
+
 
 from app.models import Admin, Assignment, AuditLog, Pattern, PatternDay, ShiftException, Staff
 from app.security import CSRF_HEADER_NAME, hash_password
@@ -114,30 +115,56 @@ def test_bulk_assign_closes_old_assignments(authenticated_client: TestClient, se
         assert len(logs) >= 2
 
 
-# --- personal copy does not change shared pattern ---
+# --- customise via copy-on-write service (Phase 3 Step D) ---
 
-def test_personal_copy_does_not_change_shared(authenticated_client: TestClient, session_factory):
+def test_customise_identical_is_reset_and_assigns(authenticated_client: TestClient, session_factory):
+    """Customising with an unchanged week is a reset (no new personal row); assigns base."""
     sid = mk_staff(session_factory, "C1", "C", "Eng")
     r = authenticated_client.post("/api/admin/shifts/patterns", json=office_payload("SharedX"))
     shared = r.json()
-    # customise
+    with session_factory() as s:
+        before = s.scalar(select(func.count()).select_from(Pattern)) or 0
     r = authenticated_client.post(f"/api/admin/shifts/patterns/{shared['id']}/customise/{sid}")
-    assert r.status_code == 201
-    copy = r.json()
-    assert copy["id"] != shared["id"]
-    assert copy["owner_staff_id"] == sid
-    assert copy["early_window_min"] == shared["early_window_min"]
-    assert copy["days"] == shared["days"]
-    # modify the copy's source name context? change copy via update
-    payload = office_payload(copy["name"])
-    payload["early_window_min"] = 99
-    r = authenticated_client.put(f"/api/admin/shifts/patterns/{copy['id']}", json=payload)
     assert r.status_code == 200
-    # shared unchanged
+    body = r.json()
+    # identical to base => reset: effective pattern is the shared base, assigned
+    assert body["id"] == shared["id"]
+    assert body["owner_staff_id"] is None
+    with session_factory() as s:
+        after = s.scalar(select(func.count()).select_from(Pattern)) or 0
+        personal = s.scalars(select(Pattern).where(Pattern.owner_staff_id.isnot(None))).all()
+        a = s.scalar(select(Assignment).where(Assignment.staff_id == sid, Assignment.effective_to.is_(None)))
+    assert after == before  # no new personal row
+    assert personal == []
+    assert a is not None and a.pattern_id == shared["id"]
+
+
+def test_customise_different_week_creates_personal_and_assigns(authenticated_client: TestClient, session_factory):
+    """Saving a week different from base creates one personal row, assigned from effective date."""
+    from app.shift_service import save_personal_week
+
+    sid = mk_staff(session_factory, "C2", "C2", "Eng")
+    r = authenticated_client.post("/api/admin/shifts/patterns", json=office_payload("SharedY"))
+    base = r.json()
+    days = [{"weekday": wd, "start_time": "07:00", "end_time": "15:00", "overnight": False, "enabled": True}
+            for wd in range(0, 5)]
+    windows = {"early_window_min": 30, "grace_min": 10, "break_min": 60}
+    with session_factory() as s:
+        res = save_personal_week(s, sid, days, windows, date(2026, 1, 5), base_pattern_id=base["id"])
+        s.commit()
+    assert res["status"] == "personal_saved"
+    with session_factory() as s:
+        personals = s.scalars(select(Pattern).where(Pattern.owner_staff_id == sid)).all()
+        a = s.scalar(select(Assignment).where(Assignment.staff_id == sid, Assignment.effective_to.is_(None)))
+        # shared base unchanged
+        shared = s.get(Pattern, base["id"])
+    assert len(personals) == 1 and personals[0].based_on_pattern_id == base["id"]
+    assert a is not None and a.pattern_id == personals[0].id
+    assert shared.early_window_min == 30 and shared.name == "SharedY"
+    # GET /patterns returns only shared
     r = authenticated_client.get("/api/admin/shifts/patterns")
-    pats = {p["id"]: p for p in r.json()}
-    assert pats[shared["id"]]["early_window_min"] == 30
-    assert pats[copy["id"]]["early_window_min"] == 99
+    assert all(p.get("owner_staff_id") is None for p in r.json())
+
 
 
 # --- exception wins over pattern (resolved view) ---
