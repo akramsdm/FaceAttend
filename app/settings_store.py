@@ -14,6 +14,7 @@ from app.models import Setting
 DEFINITIONS: dict[str, dict[str, Any]] = {
     "match_threshold": {"type": float, "min": 0.0, "max": 1.0, "default": lambda s: s.match_threshold},
     "ambiguity_margin": {"type": float, "min": 0.0, "max": 1.0, "default": lambda s: s.ambiguity_margin},
+    "duplicate_threshold": {"type": float, "min": 0.0, "max": 1.0, "default": lambda s: s.match_threshold},
     "cooldown_seconds": {"type": int, "min": 0, "max": 3600, "default": lambda s: s.cooldown_seconds},
     "work_start": {"type": "time", "default": lambda s: s.work_start},
     "grace_minutes": {"type": int, "min": 0, "max": 720, "default": lambda s: s.grace_minutes},

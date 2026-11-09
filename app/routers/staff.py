@@ -12,9 +12,11 @@ from sqlalchemy.orm import Session
 from app.audit import record_audit
 from app.config import get_settings
 from app.db import get_session
+from app.enrolment_checks import check_same_person, find_duplicate_face
 from app.models import Admin, Consent, FaceEmbedding, Staff, delete_staff_data
 from app.recognition import MODEL_NAME, MODEL_VERSION, GalleryCache, Recognizer
 from app.security import require_admin, require_admin_csrf
+from app.settings_store import get_value
 
 router = APIRouter(prefix="/api/admin/staff", tags=["staff"])
 
@@ -377,6 +379,40 @@ def enrol_staff(
                 "images": [result.model_dump() for result in results],
             },
         )
+
+    # Safety checks BEFORE deleting the target's existing embeddings.
+    # On any failure: no delete/store/consent/commit, gallery unchanged.
+    match_threshold = float(get_value(db, "match_threshold"))
+    ok_same, same_msg = check_same_person(embeddings, match_threshold)
+    if not ok_same:
+        record_audit(
+            db,
+            admin.id,
+            "enrol_blocked_mixed_people",
+            f"staff:{staff_id}",
+            "rejected mixed-person batch; nothing stored",
+        )
+        db.commit()
+        raise HTTPException(status_code=422, detail=same_msg)
+
+    duplicate_threshold = float(get_value(db, "duplicate_threshold"))
+    matched_id, dup_msg = find_duplicate_face(
+        db,
+        embeddings,
+        exclude_staff_id=staff_id,
+        threshold=duplicate_threshold,
+        acting_admin=admin,
+    )
+    if matched_id is not None:
+        record_audit(
+            db,
+            admin.id,
+            "enrol_blocked_duplicate",
+            f"staff:{staff_id}",
+            f"matched staff:{matched_id}; nothing stored",
+        )
+        db.commit()
+        raise HTTPException(status_code=409, detail=dup_msg)
 
     db.execute(delete(FaceEmbedding).where(FaceEmbedding.staff_id == staff_id))
     for vector in embeddings:

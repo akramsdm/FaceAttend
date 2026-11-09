@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/admin", tags=["settings"])
 class SettingsUpdate(BaseModel):
     match_threshold: float | None = None
     ambiguity_margin: float | None = None
+    duplicate_threshold: float | None = None
     cooldown_seconds: int | None = None
     work_start: str | None = None
     grace_minutes: int | None = None
