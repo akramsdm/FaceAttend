@@ -60,30 +60,49 @@ review-frame cleanup and missing-clock-out session closing. `*.db`, `var/`, `eva
 ## Roles
 
 - **admin** — full access (all staff/departments), settings/audit, staff CRUD/enrolment, attendance,
-  review queue, approvals/missing clock-outs, and all shift management.
-- **manager** — scoped to their `department_scope`: manage patterns/assignments/exceptions and view
-  resolved shifts for in-scope staff; review/decide approval requests and correct missing clock-outs
-  for their department; cannot access out-of-scope staff.
+  review queue, approvals/missing clock-outs, and all shift/schedule management.
+- **manager** — scoped to their `department_scope`: assign schedules and make day changes for
+  in-scope staff; edit schedules they created and personal schedules of in-scope staff (the 5 shipped
+  default shared schedules are admin-edit-only; managers can duplicate them); view resolved shifts/
+  history for in-scope staff; review/decide approval requests and correct missing clock-outs for
+  their department; cannot access out-of-scope staff.
 - **staff** — interact only via the kiosk clock flow (no self-service login).
 
 State-changing admin API calls require a server-side session cookie and `X-CSRF-Token`. Sessions
 expire after `SESSION_TIMEOUT_MINUTES` and are lost on restart. Five failed logins lock the
 account for `LOCKOUT_MINUTES`.
 
-## Shift concepts (Phase 2)
+## Schedule concepts (Phase 3, People + Schedules)
 
-- **Pattern** (shared default or personal copy) + **PatternDay**: weekly grid (on/off, start/end,
-  overnight flag) with `early_window_min` (default 30), `grace_min` (10), `break_min`. Default
-  shared patterns: Office Mon–Fri 08:00–17:00, Early, Late, Weekend, Night 22:00–06:00 overnight.
-- **Assignment**: assigns a pattern to a person (effective date range); reassigning closes the
-  previous assignment the day before (history preserved).
-- **ShiftException** (reason required): `day_off` or `custom_hours` for a date; overrides the
-  pattern.
-- **Resolution order** (first match wins): exception → personal pattern → assigned shared pattern →
-  no shift.
-- **Night shifts** belong to the date they **start**; hours/grouping use `shift_date` so they do not
-  split across midnight. **Server clock in `TIMEZONE` only** (never the kiosk clock). One shift per
-  person per day.
+- **Schedule (Pattern)** — a shared weekly template (`kind=shared`) with `PatternDay` rows (on/off,
+  start/end, `Ends next day`/overnight) and windows `early_window_min` (Clock-in opens, default 30),
+  `grace_min` (Counts as late after, default 10), `break_min` (default 0). Five default shared
+  schedules are seeded (Office Mon–Fri 08:00–17:00, Early, Late, Weekend, Night 22:00–06:00
+  overnight). Schedules are managed on the **Schedules** tab (Edit/Duplicate/Delete; Delete disabled
+  while in use). Personal copies never appear on Schedules.
+- **Assignment** — assigns a *shared* schedule to a person with an effective date range (Assignment
+  only, no copy). Reassigning ends the previous assignment the day before (history preserved).
+- **Copy-on-write (personal schedule)** — when a person's week differs from their assigned base
+  schedule, saving creates a `kind=personal` copy (`based_on_pattern_id`, owner staff, `created_by`);
+  **identical save = reset** to the base (no copy). Personal edits create effective-dated new
+  versions (old archived). Unreferenced personal copies are garbage-collected
+  (`scripts/cleanup_personal_patterns.py`); archived copies referenced by history/attendance are kept.
+  Attendance rows are never modified.
+- **Day change (exception, reason required)** — `day_off` or custom hours for a date (one exception
+  per staff per day); overrides the schedule. Supports single date or a range (≤ 62 days). **Holiday
+  (bulk day off)** can mark everyone or a department off for a date/range.
+- **Resolution order** (first match wins; Phase 2 rules engine unchanged): day change (exception) →
+  personal schedule → assigned shared schedule → no schedule. **Night shifts** belong to the date
+  they **start**; hours/grouping use `shift_date` (never split across midnight). **Server clock in
+  `TIMEZONE` only**. One shift per person per day.
+- **Dry-run impact previews** — assign, save-week (People Edit week), bulk/range day change, and
+  holiday return affected people, assignments that would end, exceptions that would be replaced, and
+  a warning when dates already have attendance; **`dry_run=true` writes nothing** and confirm is
+  disabled until previewed.
+- **Delete guards / history** — delete is blocked while a schedule has current/future assignments
+  (shows count) and when referenced by assignments/attendance history (history preserved; attendance
+  never touched). People view shows a 7-day week strip (custom/changed badges) and a time-ordered
+  history (assignments, personal versions, day changes).
 
 ## Clock flow (kiosk)
 
@@ -278,33 +297,34 @@ var/          Runtime files such as temporary review frames
 - **Face model quality depends on enrolment images** and lighting/camera; ambiguous/no-match cases go
   to the review queue with saved frames (retention-limited).
 
-## Recognition evaluation (Step K)
+## Recognition evaluation
 
 The recognition evaluator uses the **same `Recognizer`/threshold path as the app**
 (`scripts/evaluate.py` -> `app/eval_metrics.py`). In this environment, `eval_data/` contains **no
-genuine/impostor pairs** (only a placeholder), so the run produced `enrolled=0 genuine=0 impostor=0`
-(`eval_results/20261108T181401Z/`), `--help`/exit behavior unchanged (missing data exits `2`).
+genuine/impostor pairs**, so runs produce `enrolled=0 genuine=0 impostor=0 rejected=0 FAR=0 FRR=0`
+(`eval_results/20261108T181401Z/`, re-run `eval_results/20261109T113446Z/`); missing data exits `2`.
 **No FAR/FRR results were fabricated and no baseline was altered; recognition logic/results are
-unchanged by Phase 2** (shift/clock work did not modify the recognizer). To produce real FAR/FRR,
-populate `eval_data/` per the eval README and re-run `scripts/evaluate.py`.
+unchanged by Phase 2/Phase 3/kiosk UI work** (no recognizer/threshold-path changes). To produce real
+FAR/FRR, populate `eval_data/` and re-run `scripts/evaluate.py`.
 
-## Everything not done (Step K / out of scope)
+## Everything not done (Phase 3 status / out of scope)
 
-- **Real recognition re-evaluation** (no labeled `eval_data/` present here) - unchanged code path
-  only; FAR/FRR not measured.
-- **Shift rosters / leave / multiple shifts per day / split shifts** (guide constraint: 1 shift per
-  person per day).
-- **Overtime margin configuration** in the UI/flow (kept at 0 as implemented).
-- **Production deployment hardening** (reverse proxy/HTTPS/cert management, persistent session store,
-  DB migrations tool like Alembic, WSGI process model for SQLite concurrency, secret rotation).
-- **Automated scheduling** of `scripts/close_sessions.py` (a 30-minute Task Scheduler/cron schedule
-  is proposed in this README but not installed by code).
-- **Full manual browser QA** of the kiosk/shift/approvals flows against a live camera and all section
-  4.2 scenarios (automated tests cover the logic; manual mapping was delivered in Step H).
-- **Pushing to `origin/main`** (branch remains ahead locally; 8 commits since `d533d94`).
-- **Docx sync** - `docs/...Phase 2 Guide....docx` left unstaged/untracked as found; the `.md` guide
-  was read.
-- **`.kilo/` and the Step D DB backup file** left untracked/unstaged intentionally.
+- **Step J (optional, not implemented):** read-only weekly calendar by department + "working today"
+  list UI built from `/api/admin/shifts/people`. Manual QA of the new People/Schedules UI flows
+  against a live browser/camera is not automated here.
+- **`apply` of `scripts/cleanup_personal_patterns.py` on the real DB not run in this step** (dry-run
+  reported 0 personal patterns; apply requires explicit confirmation).
+- **Real recognition re-evaluation** (no labeled `eval_data/` here) — unchanged code path only;
+  FAR/FRR not measured (re-run produced all zeros, results unchanged).
+- **Docx sync** — Phase 2/3 `.docx/.md` guides left untracked as found.
+- **Pushing to `origin/main`** (branch ahead locally; commits not pushed).
+- **Out of scope (product):** split shifts, rosters, leave/swaps, staff self-service requests;
+  multiple shifts per person per day; overtime margin configuration in UI (clock flow uses margin 0).
+- **Production hardening (unchanged):** reverse proxy/HTTPS/cert management, persistent session store,
+  Alembic migrations, SQLite-concurrency/WSGI model for heavier load, secret rotation.
+- **Automated scheduling** of `scripts/close_sessions.py` (30-minute Task Scheduler/cron proposed,
+  not installed by code).
+- **Password change UI** / in-memory admin sessions (lost on restart).
 
 ## License
 
