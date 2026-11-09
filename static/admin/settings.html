@@ -19,6 +19,7 @@
           <a href="review.html">Review queue</a>
           <a href="settings.html" aria-current="page">Settings</a>
           <a href="shifts/index.html">Shifts</a>
+          <a href="reports.html">Reports</a>
           <a href="audit.html">Audit log</a>
         </nav>
         <div class="header-right">
@@ -72,7 +73,17 @@
             <p class="help">When on, kiosk asks for a random left/right head turn (two frames) before recording a match. Helps stop a still photo but is not certified anti-spoofing and may not stop a video.</p>
           </div>
           <p id="error" class="message error" role="alert"></p>
-          <div class="button-row"><button class="button" type="submit">Save settings</button></div>
+          <div class="button-row">          <h3>Follow-up rule (prompt for a conversation, not an automatic penalty)</h3>
+          <p class="help">Flags staff with N or more late arrivals in a period on the dashboard and person/report views. Changes are recorded in the audit log.</p>
+          <div class="field">
+            <label for="followup_late_count">Late arrivals threshold (N, default 3)</label>
+            <input id="followup_late_count" name="followup_late_count" type="number" min="1" max="365" step="1" />
+          </div>
+          <div class="field">
+            <label for="followup_period_days">Period in days (default 30)</label>
+            <input id="followup_period_days" name="followup_period_days" type="number" min="1" max="366" step="1" />
+          </div>
+          <button class="button" type="submit">Save settings</button></div>
         </form>
       </section>
     </main>

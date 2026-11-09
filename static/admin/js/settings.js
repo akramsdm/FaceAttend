@@ -3,7 +3,7 @@
   var form = document.getElementById("settings-form");
   var msg = document.getElementById("message");
   var err = document.getElementById("error");
-  var keys = ["match_threshold","ambiguity_margin","cooldown_seconds","work_start","grace_minutes","review_retention_days","spoof_challenge"];
+  var keys = ["match_threshold","ambiguity_margin","cooldown_seconds","work_start","grace_minutes","review_retention_days","spoof_challenge","missing_close_hours","followup_late_count","followup_period_days"];
   function setMsg(t,k){ msg.textContent=t||""; msg.className="message"+(k?" "+k:""); }
   function setErr(t){ err.textContent=t||""; }
   function setVal(el, v){ if(!el) return; if(el.tagName==="SELECT") el.value = (v===true||v==="true")?"true":"false"; else el.value = v; }

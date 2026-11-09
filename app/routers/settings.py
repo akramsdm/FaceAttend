@@ -24,6 +24,9 @@ class SettingsUpdate(BaseModel):
     grace_minutes: int | None = None
     review_retention_days: int | None = None
     spoof_challenge: bool | None = None
+    missing_close_hours: int | None = None
+    followup_late_count: int | None = None
+    followup_period_days: int | None = None
 
 
 @router.get("/settings")

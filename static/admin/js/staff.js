@@ -67,7 +67,9 @@
   function buildRow(person) {
     var row = document.createElement("tr");
     row.appendChild(cell(person.staff_code));
-    row.appendChild(cell(person.name));
+    var nc = cell("");
+    var a = document.createElement("a"); a.href = "person.html?id=" + encodeURIComponent(person.id); a.textContent = person.name || "(unnamed)";
+    nc.appendChild(a); row.appendChild(nc);
     row.appendChild(
       cell(
         person.department || "Not set",

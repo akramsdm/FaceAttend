@@ -161,12 +161,15 @@
       options: { responsive: true, maintainAspectRatio: false, scales: { x: { title: { display: true, text: "Department" } }, y: { beginAtZero: true, max: 100, title: { display: true, text: "Attendance rate (%)" } } } } });
   }
 
-  function renderList(bodyId, items, metricLabel, metricFn) {
+  function renderList(bodyId, items, metricLabel, metricFn, followup) {
     var b = document.getElementById("list-" + bodyId); if (!b) return;
     if (!items || !items.length) { b.innerHTML = '<p class="chart-state">No data for this range.</p>'; return; }
-    var h = '<ol class="rank-list">';
+    var note = (followup && followup.note) ? ('<p class="muted small" style="margin:.2rem 0 .5rem;">' + esc(followup.note) + '</p>') : '';
+    var h = note + '<ol class="rank-list">';
     items.slice(0, 8).forEach(function (p) {
-      h += '<li><a href="attendance.html?staff_id=' + encodeURIComponent(p.staff_id) + '">' + esc(p.name || ("Staff " + p.staff_id)) + '</a>'
+      var badge = p.needs_followup ? ' <span class="badge" title="Needs follow-up: a prompt for a conversation, not an automatic penalty." style="background:#fff3cd;color:#664d03;border:1px solid #ffecb5;border-radius:4px;padding:.05rem .35rem;font-size:.78rem;font-weight:600;">Needs follow-up</span>' : '';
+      h += '<li><a href="person.html?id=' + encodeURIComponent(p.staff_id) + '">' + esc(p.name || ("Staff " + p.staff_id)) + '</a>'
+        + badge
         + ' <span class="muted small">(' + esc(p.department || "-") + ') — ' + esc(metricLabel) + ': ' + esc(metricFn(p)) + '</span></li>';
     });
     h += '</ol>';
@@ -214,9 +217,9 @@
       renderHours((byDept.items || []));
       renderRate((byDept.items || []));
       var lItems = (latePeople.items || []).filter(function (x) { return (x.late || 0) > 0; });
-      renderList("late-body", lItems.length ? lItems : (latePeople.items || []), "late arrivals", function (x) { return x.late; });
+      renderList("late-body", lItems.length ? lItems : (latePeople.items || []), "late arrivals", function (x) { return x.late; }, latePeople.followup);
       var low = (absentPeople.items || []).slice().sort(function (a, b) { return (a.attendance_rate || 0) - (b.attendance_rate || 0); });
-      renderList("low-body", low, "attendance rate", function (x) { return pct(x.attendance_rate) + " (" + x.absent + " absent)"; });
+      renderList("low-body", low, "attendance rate", function (x) { return pct(x.attendance_rate) + " (" + x.absent + " absent)"; }, absentPeople.followup);
       setMsg("");
     } catch (e) {
       if (e && e.message && e.message.indexOf("session") !== -1) return;

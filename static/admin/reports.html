@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reports - Face Attendance</title>
+    <link rel="stylesheet" href="css/admin.css" />
+    <style>
+      .filters { display:flex; flex-wrap:wrap; gap:.75rem 1rem; align-items:flex-end; margin-bottom:1rem; }
+      .filters .field { margin-bottom:0; min-width:10rem; }
+      .note { background:#f6f8fa; border:1px solid var(--line); border-radius:6px; padding:.6rem .8rem; }
+      .badge { background:#fff3cd; color:#664d03; border:1px solid #ffecb5; border-radius:4px; padding:.05rem .35rem; font-size:.78rem; font-weight:600; }
+      .report-table { width:100%; border-collapse:collapse; font-size:.95rem; }
+      .report-table th, .report-table td { border:1px solid var(--line); padding:.4rem .55rem; text-align:left; }
+      .report-table th { background:#edf1f6; }
+      .totals { font-weight:700; }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="inner">
+        <p class="site-title">Face Attendance</p>
+        <nav class="site-nav" aria-label="Admin sections">
+          <a href="dashboard.html">Dashboard</a>
+          <a href="index.html">Staff</a>
+          <a href="enrol.html">Enrolment</a>
+          <a href="attendance.html">Attendance</a>
+          <a href="review.html">Review queue</a>
+          <a href="approvals.html">Approvals</a>
+          <a href="settings.html">Settings</a>
+          <a href="reports.html" aria-current="page">Reports</a>
+          <a href="shifts/index.html">Shifts</a>
+          <a href="audit.html">Audit log</a>
+        </nav>
+        <div class="header-right">
+          <span>Signed in as <span class="admin-name" data-admin-name>admin</span></span>
+          <button class="button secondary" type="button" data-logout>Sign out</button>
+        </div>
+      </div>
+    </header>
+    <main id="main" class="page">
+      <div class="page-head">
+        <div>
+          <h1>Reports</h1>
+          <p>Late-arrivals and attendance-summary reports for any date range and department. CSV exports match the on-screen numbers exactly.</p>
+        </div>
+      </div>
+
+      <form id="filters" class="filters panel" aria-label="Report filters">
+        <div class="field"><label for="report">Report</label>
+          <select id="report" name="report">
+            <option value="late-arrivals">Late arrivals</option>
+            <option value="attendance-summary">Attendance summary</option>
+          </select>
+        </div>
+        <div class="field"><label for="from">From</label><input id="from" name="from" type="date" required /></div>
+        <div class="field"><label for="to">To</label><input id="to" name="to" type="date" required /></div>
+        <div class="field"><label for="department">Department</label><select id="department" name="department"><option value="">All departments</option></select></div>
+        <div class="button-row">
+          <button class="button" type="submit">Run report</button>
+          <button id="export" class="button secondary" type="button">Export CSV</button>
+        </div>
+      </form>
+
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+      <p id="followup-note" class="note muted small" hidden></p>
+
+      <section class="panel" aria-labelledby="results-title">
+        <h2 id="results-title">Results</h2>
+        <div class="table-wrap" id="results"><p class="muted">Run a report to see results.</p></div>
+      </section>
+    </main>
+    <script src="js/common.js"></script>
+    <script src="js/reports.js"></script>
+  </body>
+</html>

@@ -37,7 +37,8 @@
       data.forEach(function(item){
         var tr = document.createElement("tr");
         tr.appendChild(td(item.id));
-        tr.appendChild(td((item.staff_name||"") + " (#" + item.staff_id + (item.staff_code? ", "+item.staff_code:"") + ")"));
+        var nc = td(""); var a = document.createElement("a"); a.href = "person.html?id=" + encodeURIComponent(item.staff_id);
+        a.textContent = (item.staff_name||"") + " (#" + item.staff_id + (item.staff_code? ", "+item.staff_code:"") + ")"; nc.appendChild(a); tr.appendChild(nc);
         tr.appendChild(td(item.department));
         tr.appendChild(td(item.type));
         tr.appendChild(td(item.local_time));

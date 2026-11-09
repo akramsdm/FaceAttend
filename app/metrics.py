@@ -707,3 +707,28 @@ def compute_insights(
 
     insights.sort(key=lambda x: (-float(x.get("effect", 0) or 0), x.get("id") or ""))
     return insights[:5]
+
+
+def followup_flags(people_metrics: Sequence[Mapping[str, Any]], *, late_count: int, period_days: int) -> dict[int, dict[str, Any]]:
+    """Flag staff with >= late_count late arrivals in the evaluated period.
+
+    Prompt for a conversation, not an automatic penalty. Returns {staff_id: {flagged, late, threshold_count, period_days}}.
+    """
+    out: dict[int, dict[str, Any]] = {}
+    try:
+        n = max(1, int(late_count))
+    except Exception:
+        n = 3
+    try:
+        d = max(1, int(period_days))
+    except Exception:
+        d = 30
+    for pm in people_metrics or []:
+        sid = pm.get("staff_id")
+        if sid is None:
+            continue
+        late = int(pm.get("late", 0) or 0)
+        flagged = late >= n
+        if flagged:
+            out[int(sid)] = {"flagged": True, "late": late, "threshold_count": n, "period_days": d}
+    return out

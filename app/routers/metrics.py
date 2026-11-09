@@ -7,12 +7,14 @@ aside from small IN-bounded loads over the already-scoped staff set).
 """
 from __future__ import annotations
 
+import csv
+import io
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -26,6 +28,7 @@ from app.metrics import (
     person_metrics as m_person_metrics,
     team_metrics as m_team_metrics,
     top_n as m_top_n,
+    followup_flags as m_followup_flags,
     _prev_equal_period,
 )
 from app.models import Admin, ApprovalRequest, Assignment, Attendance, Pattern, PatternDay, RecognitionAttempt, Setting, ShiftException, Staff
@@ -157,6 +160,9 @@ def _attendance_rows(db: Session, staff_ids: list[int], start: date, end: date, 
                 "shift_date": getattr(r, "shift_date", None),
                 "flag": getattr(r, "flag", None),
                 "undone_at": getattr(r, "undone_at", None),
+                "method": getattr(r, "method", None),
+                "edited_by": getattr(r, "edited_by", None),
+                "edit_reason": getattr(r, "edit_reason", None),
             }
         )
     return out
@@ -367,11 +373,80 @@ def people_metrics(
 ):
     start, end, tz_name, people, ids, data, rows, now_local = _context(db, admin, from_d, to_d, department)
     per = [m_person_metrics(p, (start, end), rows, data, now=now_local) for p in people]
+    n, d = _followup_cfg(db)
+    per = _attach_followup(per, n, d)
     key = _SORT_KEY[sort]
     reverse = sort != "punctuality"  # punctuality: higher is better, but ranking "top" by it means desc; spec says ranked list
     ranked = m_top_n(per, key, n=len(per), reverse=True if sort != "punctuality" else True)
     # for punctuality, show highest on-time rate first (reverse True)
-    return {"from": start.isoformat(), "to": end.isoformat(), "department": department, "sort": sort, "items": ranked}
+    return {"from": start.isoformat(), "to": end.isoformat(), "department": department, "sort": sort,
+            "followup": {"late_count": n, "period_days": d, "note": "Follow-up is a prompt for a conversation, not an automatic penalty."},
+            "items": ranked}
+
+
+def _person_context(db: Session, admin: Admin, staff_id: int, from_d: date, to_d: date):
+    start, end = _parse_range(from_d, to_d)
+    tz_name = get_all(db).get("timezone") or "UTC"
+    st = db.get(Staff, staff_id)
+    if st is None or st.anonymised:
+        raise HTTPException(status_code=404, detail="Staff not found")
+    if _role(admin) == ROLE_MANAGER and getattr(admin, "department_scope", None) != st.department:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    now_local = datetime.now(timezone.utc).astimezone(ZoneInfo(tz_name)).replace(tzinfo=None)
+    today_local = now_local.date()
+    # include today so "current schedule" resolves from the same bounded data (constant queries)
+    d0 = min(start, today_local)
+    d1 = max(end, today_local)
+    data = _shifts_data_for(db, [staff_id], d0, d1)
+    rows = _attendance_rows(db, [staff_id], start, end, tz_name)
+    return start, end, tz_name, st, data, rows, now_local, today_local
+
+
+def _arrival_offset_minutes(day_rows: list[dict[str, Any]], sh) -> float | None:
+    ins = [r for r in day_rows if r.get("type") == "in" and r.get("flag") != "missing_clock_out" and r.get("undone_at") is None]
+    if not ins or sh is None:
+        return None
+    ins.sort(key=lambda r: (r.get("timestamp") or datetime.min, r.get("id") or 0))
+    ts = ins[0].get("timestamp")
+    if ts is None:
+        return None
+    start = sh.start.replace(tzinfo=None) if getattr(sh.start, "tzinfo", None) else sh.start
+    tsn = ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
+    return round((tsn - start).total_seconds() / 60.0, 2)
+
+
+def _pattern_name(data: dict[str, Any], pattern_id: int | None) -> str | None:
+    if pattern_id is None:
+        return None
+    for p in data.get("patterns") or []:
+        if p.get("id") == pattern_id:
+            return p.get("name")
+    return None
+
+
+def _current_schedule_from(data: dict[str, Any], staff_id: int, today_local: date):
+    sh = resolve_shift(staff_id, today_local, data)
+    assign = None
+    for a in data.get("assignments") or []:
+        if a.get("staff_id") != staff_id:
+            continue
+        ef, et = a.get("effective_from"), a.get("effective_to")
+        if ef and ef <= today_local and (et is None or et >= today_local):
+            assign = a
+    exc = next((e for e in (data.get("exceptions") or []) if e.get("staff_id") == staff_id and e.get("date") == today_local), None)
+    if exc is not None:
+        return {"date": today_local.isoformat(), "source": "exception", "kind": exc.get("kind"),
+                "start": exc.get("start_time").strftime("%H:%M") if exc.get("start_time") else None,
+                "end": exc.get("end_time").strftime("%H:%M") if exc.get("end_time") else None,
+                "pattern": _pattern_name(data, assign.get("pattern_id") if assign else None)}
+    if sh is None:
+        return {"date": today_local.isoformat(), "source": "not scheduled", "pattern": _pattern_name(data, assign.get("pattern_id") if assign else None)}
+    pat_name = _pattern_name(data, assign.get("pattern_id") if assign else None)
+    src = getattr(sh, "source", None) or ("shared pattern" if assign else "not scheduled")
+    return {"date": today_local.isoformat(), "source": src, "pattern": pat_name,
+            "start": sh.start.replace(tzinfo=None).strftime("%H:%M"),
+            "end": sh.end.replace(tzinfo=None).strftime("%H:%M"),
+            "grace_min": sh.grace, "break_min": sh.break_min, "overnight": bool(sh.overnight)}
 
 
 @router.get("/person/{staff_id}")
@@ -382,20 +457,12 @@ def person_detail(
     admin: Admin = Depends(require_role(ROLE_ADMIN, ROLE_MANAGER)),
     db: Session = Depends(get_session),
 ):
-    start, end = _parse_range(from_d, to_d)
-    tz_name = get_all(db).get("timezone") or "UTC"
-    st = db.get(Staff, staff_id)
-    if st is None or st.anonymised:
-        raise HTTPException(status_code=404, detail="Staff not found")
-    # scope
-    if _role(admin) == ROLE_MANAGER and getattr(admin, "department_scope", None) != st.department:
-        raise HTTPException(status_code=403, detail="Forbidden")
-    data = _shifts_data_for(db, [staff_id], start, end)
-    rows = _attendance_rows(db, [staff_id], start, end, tz_name)
-    now_local = datetime.now(timezone.utc).astimezone(ZoneInfo(tz_name)).replace(tzinfo=None)
+    start, end, tz_name, st, data, rows, now_local, today_local = _person_context(db, admin, staff_id, from_d, to_d)
     pm = m_person_metrics(st, (start, end), rows, data, now=now_local)
+    late = int(pm.get("late", 0) or 0)
+    pm = dict(pm)
+    pm["average_late_minutes"] = round(float(pm.get("late_minutes", 0) or 0) / late, 2) if late else 0.0
 
-    # per-day status list
     day_rows = defaultdict(list)
     for r in rows:
         sd = r.get("shift_date")
@@ -414,44 +481,78 @@ def person_detail(
         dr = [r for r in day_rows.get(cur, []) if r.get("undone_at") is None]
         has_in = any(r["type"] == "in" and r.get("flag") != "missing_clock_out" for r in dr)
         miss = any(r.get("flag") == "missing_clock_out" for r in dr)
-        late = any(r.get("flag") == "late" for r in dr if r["type"] == "in")
+        late_flag = any(r.get("flag") == "late" for r in dr if r["type"] == "in")
         if sh is None:
             status = "day off" if miss else "not scheduled"
         elif miss and not has_in:
             status = "missing clock-out"
         elif not has_in:
             ended = now_local > sh.end.replace(tzinfo=None)
-            status = "absent" if ended else "not scheduled"  # in-progress/future not absent
+            status = "absent" if ended else "not scheduled"
         elif miss:
             status = "missing clock-out"
-        elif late:
+        elif late_flag:
             status = "late"
         else:
             status = "on time"
-        status_list.append({"date": cur.isoformat(), "status": status})
+        status_list.append({"date": cur.isoformat(), "status": status, "arrival_offset_minutes": _arrival_offset_minutes(day_rows.get(cur, []), sh)})
         cur += timedelta(days=1)
 
-    # recent events (from range, latest 20, exclude undone from "active" view but show flag)
-    recent = sorted(rows, key=lambda r: (r.get("timestamp") or datetime.min, r.get("id") or 0), reverse=True)[:20]
-    recent_ev = [
-        {
-            "id": r["id"],
-            "type": r["type"],
+    # full event table for range (with manager edits/reasons) + recent_events back-compat
+    editor_ids = {int(r["edited_by"]) for r in rows if r.get("edited_by") is not None}
+    editors = {}
+    if editor_ids:
+        for a in db.scalars(select(Admin).where(Admin.id.in_(editor_ids))).all():
+            editors[a.id] = getattr(a, "username", None) or str(a.id)
+    events = []
+    for r in sorted(rows, key=lambda x: (x.get("timestamp") or datetime.min, x.get("id") or 0)):
+        events.append({
+            "id": r["id"], "type": r["type"], "method": r.get("method"),
             "timestamp": r["timestamp"].isoformat() if r.get("timestamp") else None,
             "shift_date": r["shift_date"].isoformat() if hasattr(r.get("shift_date"), "isoformat") and r.get("shift_date") else (str(r.get("shift_date")) if r.get("shift_date") else None),
-            "flag": r.get("flag"),
-            "undone": r.get("undone_at") is not None,
-        }
-        for r in recent
-    ]
+            "flag": r.get("flag"), "undone": r.get("undone_at") is not None,
+            "edited_by": r.get("edited_by"), "edited_by_name": editors.get(r.get("edited_by")),
+            "edit_reason": r.get("edit_reason"),
+        })
+    recent_ev = list(reversed(events))[:20]
+    n, d = _followup_cfg(db)
+    fu = m_followup_flags([pm], late_count=n, period_days=d).get(staff_id)
+    schedule = _current_schedule_from(data, staff_id, today_local)
     return {
-        "from": start.isoformat(),
-        "to": end.isoformat(),
+        "from": start.isoformat(), "to": end.isoformat(),
         "staff": {"id": st.id, "name": st.name, "department": st.department, "staff_code": st.staff_code},
         "metrics": pm,
+        "followup": {"late_count": n, "period_days": d, "note": "Follow-up is a prompt for a conversation, not an automatic penalty.",
+                     "flagged": bool(fu), **({"late": fu["late"]} if fu else {})},
         "days": status_list,
+        "events": events,
         "recent_events": recent_ev,
+        "schedule": schedule,
     }
+
+
+@router.get("/person/{staff_id}/export.csv")
+def person_export_csv(
+    staff_id: int,
+    from_d: date = Query(..., alias="from"),
+    to_d: date = Query(..., alias="to"),
+    admin: Admin = Depends(require_role(ROLE_ADMIN, ROLE_MANAGER)),
+    db: Session = Depends(get_session),
+):
+    start, end, tz_name, st, data, rows, now_local, _today = _person_context(db, admin, staff_id, from_d, to_d)
+    editor_ids = {int(r["edited_by"]) for r in rows if r.get("edited_by") is not None}
+    editors = {a.id: (getattr(a, "username", None) or str(a.id)) for a in db.scalars(select(Admin).where(Admin.id.in_(editor_ids))).all()} if editor_ids else {}
+    headers = ["event_id", "staff_id", "staff_code", "name", "department", "type", "method", "local_time", "shift_date", "flag", "undone", "edited_by", "edit_reason"]
+    out_rows = []
+    for r in sorted(rows, key=lambda x: (x.get("timestamp") or datetime.min, x.get("id") or 0)):
+        out_rows.append([
+            r["id"], st.id, st.staff_code, st.name, st.department or "", r["type"], r.get("method") or "",
+            r["timestamp"].isoformat() if r.get("timestamp") else "",
+            r["shift_date"].isoformat() if hasattr(r.get("shift_date"), "isoformat") and r.get("shift_date") else (str(r.get("shift_date")) if r.get("shift_date") else ""),
+            r.get("flag") or "", "yes" if r.get("undone_at") is not None else "no",
+            editors.get(r.get("edited_by")) or (r.get("edited_by") or ""), r.get("edit_reason") or "",
+        ])
+    return _csv_response(headers, out_rows, f"person-{st.staff_code}-{start.isoformat()}-to-{end.isoformat()}.csv")
 
 
 def _recognition_health(db: Session, start: date, end: date, tz_name: str) -> dict[str, Any]:
@@ -523,3 +624,127 @@ def insights(
         "previous": {"from": pstart.isoformat(), "to": pend.isoformat()},
         "items": items,
     }
+
+
+# ------------------------------- 3B reports/follow-up -------------------
+
+def _followup_cfg(db: Session) -> tuple[int, int]:
+    vals = _load_settings(db)
+    try:
+        n = int(vals.get("followup_late_count", 3) or 3)
+    except Exception:
+        n = 3
+    try:
+        d = int(vals.get("followup_period_days", 30) or 30)
+    except Exception:
+        d = 30
+    return n, d
+
+
+def _attach_followup(per: list[dict[str, Any]], n: int, d: int) -> list[dict[str, Any]]:
+    flags = m_followup_flags(per, late_count=n, period_days=d)
+    out = []
+    for pm in per:
+        x = dict(pm)
+        f = flags.get(int(x.get("staff_id") or 0))
+        x["needs_followup"] = bool(f)
+        if f:
+            x["followup"] = f
+        out.append(x)
+    return out
+
+
+def _csv_response(headers: list[str], rows: list[list[Any]], name: str) -> Response:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(headers)
+    for r in rows:
+        w.writerow(r)
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.get("/reports/late-arrivals")
+def report_late_arrivals(
+    from_d: date = Query(..., alias="from"),
+    to_d: date = Query(..., alias="to"),
+    department: str | None = None,
+    format: str = Query("json", pattern="^(json|csv)$"),
+    admin: Admin = Depends(require_role(ROLE_ADMIN, ROLE_MANAGER)),
+    db: Session = Depends(get_session),
+):
+    start, end, tz_name, people, ids, data, rows, now_local = _context(db, admin, from_d, to_d, department)
+    per = [m_person_metrics(p, (start, end), rows, data, now=now_local) for p in people]
+    n, d = _followup_cfg(db)
+    per = _attach_followup(per, n, d)
+    items = [p for p in per if int(p.get("late", 0) or 0) > 0]
+    items.sort(key=lambda x: (-int(x.get("late", 0) or 0), -int(x.get("late_minutes", 0) or 0), str(x.get("name") or "")))
+    totals = {
+        "staff": len(items),
+        "late_arrivals": sum(int(x.get("late", 0) or 0) for x in items),
+        "late_minutes": sum(int(x.get("late_minutes", 0) or 0) for x in items),
+    }
+    cols = ["staff_id", "staff_code", "name", "department", "late_arrivals", "late_minutes", "on_time_rate", "attendance_rate", "needs_followup"]
+    if format == "csv":
+        csv_rows = []
+        for x in items:
+            csv_rows.append([x.get("staff_id"), x.get("staff_code") or "", x.get("name") or "", x.get("department") or "",
+                             int(x.get("late", 0) or 0), int(x.get("late_minutes", 0) or 0),
+                             round(float(x.get("on_time_rate", 0) or 0), 6), round(float(x.get("attendance_rate", 0) or 0), 6),
+                             "yes" if x.get("needs_followup") else "no"])
+        csv_rows.append(["TOTAL", "", "", "", totals["late_arrivals"], totals["late_minutes"], "", "", ""])
+        return _csv_response(cols, csv_rows, f"late-arrivals-{start.isoformat()}-to-{end.isoformat()}.csv")
+    # json: strip bulky per-day detail, keep summary fields
+    slim = [{k: x.get(k) for k in ("staff_id", "staff_code", "name", "department", "clock_ins", "on_time", "late", "late_minutes", "on_time_rate", "attendance_rate", "hours_worked", "missing_clock_outs", "needs_followup")} for x in items]
+    return {"from": start.isoformat(), "to": end.isoformat(), "department": department,
+            "followup": {"late_count": n, "period_days": d, "note": "Follow-up is a prompt for a conversation, not an automatic penalty."},
+            "totals": totals, "columns": cols, "items": slim}
+
+
+@router.get("/reports/attendance-summary")
+def report_attendance_summary(
+    from_d: date = Query(..., alias="from"),
+    to_d: date = Query(..., alias="to"),
+    department: str | None = None,
+    format: str = Query("json", pattern="^(json|csv)$"),
+    admin: Admin = Depends(require_role(ROLE_ADMIN, ROLE_MANAGER)),
+    db: Session = Depends(get_session),
+):
+    start, end, tz_name, people, ids, data, rows, now_local = _context(db, admin, from_d, to_d, department)
+    per = [m_person_metrics(p, (start, end), rows, data, now=now_local) for p in people]
+    n, d = _followup_cfg(db)
+    per = _attach_followup(per, n, d)
+    items = sorted(per, key=lambda x: (str(x.get("department") or ""), str(x.get("name") or "")))
+    totals = {
+        "staff": len(items),
+        "scheduled_ended": sum(int(x.get("scheduled_ended", 0) or 0) for x in items),
+        "present": sum(int(x.get("present", 0) or 0) for x in items),
+        "absent": sum(int(x.get("absent", 0) or 0) for x in items),
+        "late": sum(int(x.get("late", 0) or 0) for x in items),
+        "hours_worked": round(sum(float(x.get("hours_worked", 0) or 0) for x in items), 4),
+        "missing_clock_outs": sum(int(x.get("missing_clock_outs", 0) or 0) for x in items),
+    }
+    cols = ["staff_id", "staff_code", "name", "department", "scheduled_ended", "present", "absent", "late", "on_time_rate", "attendance_rate", "hours_worked", "missing_clock_outs", "needs_followup"]
+    if format == "csv":
+        csv_rows = []
+        for x in items:
+            csv_rows.append([x.get("staff_id"), x.get("staff_code") or "", x.get("name") or "", x.get("department") or "",
+                             int(x.get("scheduled_ended", 0) or 0), int(x.get("present", 0) or 0), int(x.get("absent", 0) or 0),
+                             int(x.get("late", 0) or 0), round(float(x.get("on_time_rate", 0) or 0), 6),
+                             round(float(x.get("attendance_rate", 0) or 0), 6), round(float(x.get("hours_worked", 0) or 0), 4),
+                             int(x.get("missing_clock_outs", 0) or 0), "yes" if x.get("needs_followup") else "no"])
+        csv_rows.append(["TOTAL", "", "", "", totals["scheduled_ended"], totals["present"], totals["absent"], totals["late"], "", "", totals["hours_worked"], totals["missing_clock_outs"], ""])
+        return _csv_response(cols, csv_rows, f"attendance-summary-{start.isoformat()}-to-{end.isoformat()}.csv")
+    slim = [{k: x.get(k) for k in ("staff_id", "staff_code", "name", "department", "scheduled_ended", "present", "absent", "late", "on_time_rate", "attendance_rate", "hours_worked", "missing_clock_outs", "needs_followup")} for x in items]
+    return {"from": start.isoformat(), "to": end.isoformat(), "department": department,
+            "followup": {"late_count": n, "period_days": d, "note": "Follow-up is a prompt for a conversation, not an automatic penalty."},
+            "totals": totals, "columns": cols, "items": slim}
+
+
+@router.get("/followup")
+def followup_config(
+    _admin: Admin = Depends(require_role(ROLE_ADMIN, ROLE_MANAGER)),
+    db: Session = Depends(get_session),
+):
+    n, d = _followup_cfg(db)
+    return {"late_count": n, "period_days": d, "note": "Follow-up is a prompt for a conversation, not an automatic penalty."}

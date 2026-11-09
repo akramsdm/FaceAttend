@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Person - Face Attendance</title>
+    <link rel="stylesheet" href="css/admin.css" />
+    <style>
+      .filters { display:flex; flex-wrap:wrap; gap:.75rem 1rem; align-items:flex-end; margin-bottom:1rem; }
+      .filters .field { margin-bottom:0; min-width:10rem; }
+      .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1rem; }
+      .kpi-card { border:1px solid var(--line); border-radius:8px; padding:.8rem 1rem; background:#fbfcfe; }
+      .kpi-label { margin:0; color:var(--muted); font-size:.9rem; }
+      .kpi-value { margin:.1rem 0 0; font-size:1.6rem; font-weight:700; }
+      .note { background:#fff8e6; border:1px solid #f0d88a; border-radius:6px; padding:.6rem .8rem; }
+      .badge { background:#fff3cd; color:#664d03; border:1px solid #ffecb5; border-radius:4px; padding:.05rem .35rem; font-size:.78rem; font-weight:600; }
+      .cal { display:grid; grid-template-columns:repeat(7,1fr); gap:.35rem; }
+      .cal-head { font-weight:600; font-size:.85rem; text-align:center; color:var(--muted); padding:.2rem 0; }
+      .day { border:1px solid var(--line); border-radius:6px; min-height:3.4rem; padding:.25rem .35rem; font-size:.82rem; background:#fff; }
+      .day .d { font-weight:700; }
+      .day .s { display:block; margin-top:.1rem; }
+      .st-on-time { background:#eaf6ef; border-color:#9fd3b1; }
+      .st-late { background:#fff6e5; border-color:#efc97a; }
+      .st-absent { background:#fdeceb; border-color:#e8a4a8; }
+      .st-day-off, .st-not-scheduled { background:#f3f4f6; border-color:#d0d5dd; color:#555; }
+      .st-missing-clock-out { background:#fff1e6; border-color:#f0b37e; }
+      .legend { display:flex; flex-wrap:wrap; gap:.5rem 1rem; margin:.5rem 0 0; font-size:.9rem; }
+      .legend span::before { content:""; display:inline-block; width:.9rem; height:.9rem; border:1px solid var(--line); border-radius:3px; margin-right:.3rem; vertical-align:-0.1rem; }
+      .l-on-time::before { background:#eaf6ef; border-color:#9fd3b1; } .l-late::before { background:#fff6e5; border-color:#efc97a; }
+      .l-absent::before { background:#fdeceb; border-color:#e8a4a8; } .l-off::before { background:#f3f4f6; border-color:#d0d5dd; }
+      .l-missing::before { background:#fff1e6; border-color:#f0b37e; }
+      .chart-wrap { position:relative; min-height:220px; }
+      .ev-table { width:100%; border-collapse:collapse; font-size:.92rem; }
+      .ev-table th, .ev-table td { border:1px solid var(--line); padding:.35rem .5rem; text-align:left; vertical-align:top; }
+      .ev-table th { background:#edf1f6; }
+      @media print {
+        .site-header, .filters .button, #export-btn, #print-btn, .skip-link { display:none !important; }
+        .page { margin:0; padding:0; } .panel { break-inside:avoid; }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="inner">
+        <p class="site-title">Face Attendance</p>
+        <nav class="site-nav" aria-label="Admin sections">
+          <a href="dashboard.html">Dashboard</a>
+          <a href="index.html">Staff</a>
+          <a href="enrol.html">Enrolment</a>
+          <a href="attendance.html">Attendance</a>
+          <a href="review.html">Review queue</a>
+          <a href="approvals.html">Approvals</a>
+          <a href="settings.html">Settings</a>
+          <a href="reports.html">Reports</a>
+          <a href="shifts/index.html">Shifts</a>
+          <a href="audit.html">Audit log</a>
+        </nav>
+        <div class="header-right">
+          <span>Signed in as <span class="admin-name" data-admin-name>admin</span></span>
+          <button class="button secondary" type="button" data-logout>Sign out</button>
+        </div>
+      </div>
+    </header>
+    <main id="main" class="page">
+      <div class="page-head">
+        <div>
+          <h1 id="title">Person</h1>
+          <p id="subtitle" class="muted">Loading…</p>
+        </div>
+        <div class="button-row">
+          <button id="export-btn" class="button secondary" type="button">Export this person's CSV</button>
+          <button id="print-btn" class="button secondary" type="button">Print-friendly view</button>
+        </div>
+      </div>
+
+      <form id="filters" class="filters panel" aria-label="Date range">
+        <div class="field"><label for="from">From</label><input id="from" name="from" type="date" required /></div>
+        <div class="field"><label for="to">To</label><input id="to" name="to" type="date" required /></div>
+        <button class="button" type="submit">Apply</button>
+      </form>
+
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+      <p id="followup-note" class="note" hidden></p>
+
+      <section class="panel" aria-labelledby="kpi-title">
+        <h2 id="kpi-title">Summary</h2>
+        <div class="kpi-grid" id="kpis" aria-live="polite"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="cal-title">
+        <h2 id="cal-title">Calendar</h2>
+        <p class="muted small">Each day shows a colour and a text label (on time, late, absent, day off, missing clock-out, not scheduled).</p>
+        <div id="calendar"></div>
+        <p class="legend" aria-label="Legend">
+          <span class="l-on-time">on time</span><span class="l-late">late</span><span class="l-absent">absent</span>
+          <span class="l-off">day off / not scheduled</span><span class="l-missing">missing clock-out</span>
+        </p>
+      </section>
+
+      <section class="panel" aria-labelledby="arr-title">
+        <h2 id="arr-title">Arrival offset by day (minutes vs shift start; negative = early)</h2>
+        <div class="chart-wrap" id="arr-body"><canvas id="arr-chart" role="img" aria-label="Line chart of arrival offset by day"></canvas></div>
+      </section>
+
+      <section class="panel" aria-labelledby="ev-title">
+        <h2 id="ev-title">Events (flags, manager edits and reasons)</h2>
+        <div class="table-wrap" id="events"><p class="muted">Loading…</p></div>
+      </section>
+
+      <section class="panel" aria-labelledby="sch-title">
+        <h2 id="sch-title">Current schedule and source</h2>
+        <div id="schedule"><p class="muted">Loading…</p></div>
+      </section>
+    </main>
+    <script src="/static/vendor/chart.umd.min.js"></script>
+    <script src="js/common.js"></script>
+    <script src="js/person.js"></script>
+  </body>
+</html>

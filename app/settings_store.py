@@ -21,6 +21,8 @@ DEFINITIONS: dict[str, dict[str, Any]] = {
     "review_retention_days": {"type": int, "min": 1, "max": 365, "default": lambda s: s.review_retention_days},
     "spoof_challenge": {"type": bool, "default": lambda s: False},
     "missing_close_hours": {"type": int, "min": 1, "max": 48, "default": lambda s: 4},
+    "followup_late_count": {"type": int, "min": 1, "max": 365, "default": lambda s: 3},
+    "followup_period_days": {"type": int, "min": 1, "max": 366, "default": lambda s: 30},
 }
 
 
