@@ -72,6 +72,32 @@ State-changing admin API calls require a server-side session cookie and `X-CSRF-
 expire after `SESSION_TIMEOUT_MINUTES` and are lost on restart. Five failed logins lock the
 account for `LOCKOUT_MINUTES`.
 
+## Enrolment and duplicate-face protection
+
+Admins enrol 3–5 frames per staff member (`POST /api/admin/staff/{id}/enrol`, `app/routers/staff.py`,
+checks in `app/enrolment_checks.py`; captured images are not saved). Per-image quality checks:
+decode, exactly one face (`no_face`/`multiple_faces`), minimum face width (`MIN_FACE_WIDTH`, default
+120), blur (Laplacian variance vs `BLUR_THRESHOLD`, default 100.0), then SFace embedding (L2-normalized;
+cosine similarity, higher = more similar). At least 3 acceptable images are required.
+
+Safety checks run **before** deleting/replacing the target’s existing embeddings; on any failure
+**nothing is deleted or stored, no Consent row, no commit, gallery unchanged**, and an audit entry
+is written (ids only, never vectors/scores):
+- **Mixed-person batch (422):** each accepted embedding is compared to the first using cosine
+  similarity with the live `match_threshold`. Any pair below the threshold rejects with “The photos
+  appear to show different people. Retake all photos of one person.” (`enrol_blocked_mixed_people`).
+- **Cross-staff duplicate (409):** queries `FaceEmbedding` joined to `Staff` directly (not the
+  gallery cache) for every staff member **except the target, including inactive staff, excluding
+  anonymised**. Best score per other staff = max cosine over that staff’s vectors × new embeddings
+  (same as `rules.match`). Score **>= live `duplicate_threshold` blocks** (exact threshold blocks;
+  just below passes). Detail names the matched staff (`<name> (<code>), inactive` when applicable)
+  but **never reveals scores**; a manager whose `department_scope` does not include the matched
+  staff sees only `staff code <code>` (`enrol_blocked_duplicate`, records matched staff id).
+- **Re-enrolment of the same staff member** still works and replaces that staff’s embeddings (own
+  `staff_id` excluded). `duplicate_threshold` (live, DB-backed, 0–1, default = `match_threshold`)
+  is validated/audited like other settings; no override option. Gallery refreshes after a successful
+  commit; the gallery cache holds only active, non-anonymised staff.
+
 ## Schedule concepts (Phase 3, People + Schedules)
 
 - **Schedule (Pattern)** — a shared weekly template (`kind=shared`) with `PatternDay` rows (on/off,
@@ -164,16 +190,46 @@ Phase 2 kiosk uses `/api/scan` + `/api/clock`.
 ## Settings
 
 Live (DB-backed) settings are editable in the admin UI and take effect without restart (signin/
-clock-related reads use live values where applicable): `match_threshold`, `ambiguity_margin`,
+clock/enrolment reads use live values where applicable): `match_threshold`, `ambiguity_margin`,
+`duplicate_threshold` (enrolment cross-staff duplicate block, 0–1, default = `match_threshold`),
 `cooldown_seconds`, `work_start`, `grace_minutes`, `review_retention_days`, `spoof_challenge`,
 `missing_close_hours` (hours after shift end before an open session is auto-closed as missing
 clock-out; default 4).
 
-Shift-aware reporting: late = first clock-in after **shift start + grace** (falls back to global
-`work_start`/`grace_minutes` when no resolved shift); monthly CSV adds early departure/overtime/
-missing-clock-out flags and hours worked per shift (`in→out` minus break), grouped by `shift_date`
-(night shifts not split). Dashboard counts present/absent **against the assigned shift** and shows
-late/missing clock-out.
+## Dashboard, metrics, and reports
+
+**Metric definitions (shift-aware; `app/routers/attendance.py`):**
+- **`active_staff`** — count of `Staff` with `active` and not `anonymised`.
+- **`present_today`** — number of *scheduled* staff (a shift resolves for `today_local` via
+  exception→personal→shared) who have a non-undone, non-`missing_clock_out` `in` in today’s local
+  UTC window. Counted **against the assigned shift** (present ∩ scheduled).
+- **`absent_today`** — `scheduled - present_today` (absent only when a shift is assigned).
+- **`late_arrivals`** — staff whose first non-undone/non-missing `in` today is after
+  **shift start + `grace_min`** (honors stored `flag='late'`); falls back to global
+  `work_start`/`grace_minutes` when no resolved shift.
+- **`missing_clock_out`** — count of today’s non-undone attendance rows with
+  `flag='missing_clock_out'` (auto-close rows whose timestamp falls in the window).
+- **Recognition (today):** `recognition_attempts_today`, `matched_today`,
+  `recognition_success_rate = matched/attempts` (null if none). All in the server `TIMEZONE`’s
+  local day (`date_local`/`timezone`).
+
+**Dashboard** (`GET /api/admin/attendance/dashboard`, `static/admin/dashboard.html` +
+`static/admin/js/dashboard.js`) surfaces the metrics above (active staff, present/absent vs
+assigned shift, late, missing clock-out, recognition attempts/matched/rate).
+
+**Reports/exports:** `GET /api/admin/attendance` (filters), `GET /export.csv` (includes
+`shift_date,flag,edited_by,edit_reason`), `GET /report/monthly.csv` (per staff/month:
+days_present, late_arrivals, early_departures, overtime_count, missing_clock_outs, hours_worked
+from in→out minus break — **missing clock-outs excluded from hour pairing/totals** — and
+unpaired_in_days; grouped by `shift_date` with a buffer so night shifts are not split). History is
+viewed via the Attendance list/exports and the Shifts **People → History** panel (time-ordered
+assignments, personal schedule versions, day changes); there is no separate per-person profile page.
+
+**Follow-up rules (operational, not automated notifications):** missing clock-outs are auto-closed
+`missing_close_hours` after shift end (default 4) flagged `missing_clock_out` and **never counted
+as worked time** — a manager corrects with a required reason (Approvals/missing-clock-out queue,
+dept-scoped, audited). Late/early/out-of-window cases follow the shift decision/approval flow;
+blocked kiosk actions can raise an approval request for manager review.
 
 Environment variables (development defaults):
 
@@ -307,24 +363,29 @@ genuine/impostor pairs**, so runs produce `enrolled=0 genuine=0 impostor=0 rejec
 unchanged by Phase 2/Phase 3/kiosk UI work** (no recognizer/threshold-path changes). To produce real
 FAR/FRR, populate `eval_data/` and re-run `scripts/evaluate.py`.
 
-## Everything not done (Phase 3 status / out of scope)
+## Everything not done (Step 3C status / out of scope)
 
 - **Step J (optional, not implemented):** read-only weekly calendar by department + "working today"
-  list UI built from `/api/admin/shifts/people`. Manual QA of the new People/Schedules UI flows
-  against a live browser/camera is not automated here.
-- **`apply` of `scripts/cleanup_personal_patterns.py` on the real DB not run in this step** (dry-run
-  reported 0 personal patterns; apply requires explicit confirmation).
-- **Real recognition re-evaluation** (no labeled `eval_data/` here) — unchanged code path only;
-  FAR/FRR not measured (re-run produced all zeros, results unchanged).
-- **Docx sync** — Phase 2/3 `.docx/.md` guides left untracked as found.
+  list UI built from `/api/admin/shifts/people`.
+- **No separate per-person profile page** and **no automated follow-up notifications/reminders**
+  (follow-up is handled via the Approvals/missing-clock-out queue and manager correction;
+  attendance/history available via list/exports and People → History).
+- **`apply` of `scripts/cleanup_personal_patterns.py` on the real DB not run** (dry-run reported
+  0 personal patterns; apply requires explicit confirmation + DB backup).
+- **Real recognition FAR/FRR not measured** (no labeled `eval_data/`); eval re-runs produced
+  `enrolled=0/genuine=0/impostor=0` (`20261108T181401Z`, `20261109T113446Z`, `20261109T121932Z`).
+  Recognition logic/results unchanged by Phase 2/3/kiosk UI/Step 1B work.
+- **Manual browser/QA** of new People/Schedules UI, enrolment duplicate/mixed-person refusals,
+  kiosk/camera flows, and dashboard rendering not automated here (dashboard metric formulas verified
+  against a hand-built 3-person/2-week dataset in a temp DB; see test notes below).
 - **Pushing to `origin/main`** (branch ahead locally; commits not pushed).
-- **Out of scope (product):** split shifts, rosters, leave/swaps, staff self-service requests;
-  multiple shifts per person per day; overtime margin configuration in UI (clock flow uses margin 0).
-- **Production hardening (unchanged):** reverse proxy/HTTPS/cert management, persistent session store,
-  Alembic migrations, SQLite-concurrency/WSGI model for heavier load, secret rotation.
-- **Automated scheduling** of `scripts/close_sessions.py` (30-minute Task Scheduler/cron proposed,
-  not installed by code).
-- **Password change UI** / in-memory admin sessions (lost on restart).
+- **Docx sync** — Phase 2/3 `.docx/.md` guides left untracked as found. **`_wtest.py`** scratch
+  file left untracked (not committed).
+- **Out of scope (product):** split shifts, rosters, leave/swaps, staff self-service; multiple
+  shifts/person/day; overtime margin configuration in UI (clock flow uses margin 0).
+- **Production hardening unchanged:** HTTPS/proxy, persistent sessions, Alembic, SQLite
+  concurrency/WSGI for heavier load, secret rotation, password-change UI, auto-scheduling of
+  `scripts/close_sessions.py` (30-min proposed, not installed).
 
 ## License
 

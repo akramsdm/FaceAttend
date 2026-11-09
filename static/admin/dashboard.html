@@ -5,6 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Dashboard - Face Attendance</title>
     <link rel="stylesheet" href="css/admin.css" />
+    <style>
+      .filters { display:flex; flex-wrap:wrap; gap:.75rem 1rem; align-items:flex-end; margin-bottom:1rem; }
+      .filters .field { margin-bottom:0; min-width:10rem; }
+      .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:1rem; }
+      .kpi-card { border:1px solid var(--line); border-radius:8px; padding:.9rem 1rem; background:#fbfcfe; text-decoration:none; color:inherit; display:block; }
+      .kpi-card:hover, .kpi-card:focus { border-color:var(--accent); box-shadow:var(--shadow); }
+      .kpi-label { margin:0; color:var(--muted); font-size:.92rem; }
+      .kpi-value { margin:.15rem 0 0; font-size:1.9rem; font-weight:700; }
+      .chart-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:1rem; }
+      .chart-card { border:1px solid var(--line); border-radius:8px; padding:1rem; background:#fff; }
+      .chart-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.5rem; margin-bottom:.5rem; }
+      .chart-head h3 { margin:0; font-size:1.05rem; }
+      .chart-body { position:relative; min-height:220px; }
+      .chart-body canvas { max-width:100%; }
+      .chart-state { padding:1.5rem .5rem; text-align:center; color:var(--muted); }
+      .chart-table { width:100%; border-collapse:collapse; font-size:.92rem; }
+      .chart-table th, .chart-table td { border:1px solid var(--line); padding:.35rem .5rem; text-align:left; }
+      .chart-table th { background:#edf1f6; }
+      .lists-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:1rem; }
+      .rank-list { margin:0; padding-left:1.25rem; }
+      .rank-list li { margin:.3rem 0; }
+      @media (max-width: 700px) { .chart-grid { grid-template-columns:1fr; } .kpi-grid { grid-template-columns:repeat(2,1fr); } }
+    </style>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -17,6 +40,7 @@
           <a href="enrol.html">Enrolment</a>
           <a href="attendance.html">Attendance</a>
           <a href="review.html">Review queue</a>
+          <a href="approvals.html">Approvals</a>
           <a href="settings.html">Settings</a>
           <a href="shifts/index.html">Shifts</a>
           <a href="audit.html">Audit log</a>
@@ -31,22 +55,85 @@
       <div class="page-head">
         <div>
           <h1>Dashboard</h1>
-          <p>Today’s attendance and recognition summary (local time: <span id="tz-label">UTC</span>).</p>
+          <p>Attendance metrics for the selected range (<span id="range-label">-</span>). Timezone: <span id="tz-label">local</span>.</p>
         </div>
         <button id="refresh" class="button secondary" type="button">Refresh</button>
       </div>
-      <p id="message" class="message" role="status" aria-live="polite"></p>
-      <section class="panel" aria-labelledby="summary-title">
-        <h2 id="summary-title">Today</h2>
-        <div class="summary-grid" role="list">
-          <div class="summary-card" role="listitem"><p class="summary-label">Present today</p><p id="present" class="summary-value">-</p></div>
-          <div class="summary-card" role="listitem"><p class="summary-label">Absent today</p><p id="absent" class="summary-value">-</p></div>
-          <div class="summary-card" role="listitem"><p class="summary-label">Late arrivals</p><p id="late" class="summary-value">-</p></div>
-          <div class="summary-card" role="listitem"><p class="summary-label">Recognition success rate (today)</p><p id="success" class="summary-value">-</p></div>
+
+      <form id="filters" class="filters panel" aria-label="Dashboard filters">
+        <div class="field">
+          <label for="range">Date range</label>
+          <select id="range" name="range">
+            <option value="today">Today</option>
+            <option value="7">Last 7 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="custom">Custom</option>
+          </select>
         </div>
-        <p class="muted small" id="detail"></p>
+        <div class="field" id="custom-wrap" hidden>
+          <label for="from">From</label>
+          <input id="from" name="from" type="date" />
+        </div>
+        <div class="field" id="custom-wrap-to" hidden>
+          <label for="to">To</label>
+          <input id="to" name="to" type="date" />
+        </div>
+        <div class="field">
+          <label for="department">Department</label>
+          <select id="department" name="department"><option value="">All departments</option></select>
+        </div>
+        <button class="button" type="submit">Apply</button>
+      </form>
+
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+
+      <section class="panel" aria-labelledby="kpi-title">
+        <h2 id="kpi-title">Key indicators</h2>
+        <div class="kpi-grid" id="kpi-grid" aria-live="polite" aria-busy="false">
+          <a class="kpi-card" href="attendance.html" aria-label="Present today"><p class="kpi-label">Present today</p><p id="kpi-present" class="kpi-value">-</p></a>
+          <a class="kpi-card" href="attendance.html" aria-label="Absent so far"><p class="kpi-label">Absent (so far)</p><p id="kpi-absent" class="kpi-value">-</p></a>
+          <a class="kpi-card" href="attendance.html" aria-label="Late today"><p class="kpi-label">Late today</p><p id="kpi-late" class="kpi-value">-</p></a>
+          <a class="kpi-card" href="attendance.html" aria-label="Clocked in now"><p class="kpi-label">Clocked in now</p><p id="kpi-clocked" class="kpi-value">-</p></a>
+          <a class="kpi-card" href="approvals.html" aria-label="Missing clock-outs"><p class="kpi-label">Missing clock-outs</p><p id="kpi-missing" class="kpi-value">-</p></a>
+          <a class="kpi-card" href="approvals.html" aria-label="Pending approvals"><p class="kpi-label">Pending approvals</p><p id="kpi-pending" class="kpi-value">-</p></a>
+        </div>
+      </section>
+
+      <section class="chart-grid" aria-label="Charts">
+        <div class="chart-card" id="card-trend">
+          <div class="chart-head"><h3 id="title-trend">Daily attendance trend (present, late, absent)</h3><button type="button" class="button secondary small" data-toggle="trend">View as table</button></div>
+          <div class="chart-body" id="body-trend"><canvas id="chart-trend" role="img" aria-label="Stacked bar chart: daily present, late and absent counts"></canvas></div>
+        </div>
+        <div class="chart-card" id="card-arrivals">
+          <div class="chart-head"><h3 id="title-arrivals">Arrival-time distribution (minutes vs shift start)</h3><button type="button" class="button secondary small" data-toggle="arrivals">View as table</button></div>
+          <div class="chart-body" id="body-arrivals"><canvas id="chart-arrivals" role="img" aria-label="Histogram of arrival offsets in minutes relative to shift start"></canvas></div>
+        </div>
+        <div class="chart-card" id="card-weekday">
+          <div class="chart-head"><h3 id="title-weekday">Late arrivals by weekday</h3><button type="button" class="button secondary small" data-toggle="weekday">View as table</button></div>
+          <div class="chart-body" id="body-weekday"><canvas id="chart-weekday" role="img" aria-label="Bar chart: late arrivals by weekday"></canvas></div>
+        </div>
+        <div class="chart-card" id="card-hours">
+          <div class="chart-head"><h3 id="title-hours">Hours worked by department</h3><button type="button" class="button secondary small" data-toggle="hours">View as table</button></div>
+          <div class="chart-body" id="body-hours"><canvas id="chart-hours" role="img" aria-label="Bar chart: hours worked by department"></canvas></div>
+        </div>
+        <div class="chart-card" id="card-rate">
+          <div class="chart-head"><h3 id="title-rate">Attendance rate by department</h3><button type="button" class="button secondary small" data-toggle="rate">View as table</button></div>
+          <div class="chart-body" id="body-rate"><canvas id="chart-rate" role="img" aria-label="Bar chart: attendance rate by department"></canvas></div>
+        </div>
+      </section>
+
+      <section class="lists-grid" aria-label="Ranked lists">
+        <div class="panel">
+          <h2 id="list-late-title">Most late arrivals</h2>
+          <div id="list-late-body"><p class="chart-state">Loading…</p></div>
+        </div>
+        <div class="panel">
+          <h2 id="list-low-title">Lowest attendance rate</h2>
+          <div id="list-low-body"><p class="chart-state">Loading…</p></div>
+        </div>
       </section>
     </main>
+    <script src="/static/vendor/chart.umd.min.js"></script>
     <script src="js/common.js"></script>
     <script src="js/dashboard.js"></script>
   </body>

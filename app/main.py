@@ -13,6 +13,7 @@ from app.routers.attendance import router as attendance_router
 from app.routers.auth import router as auth_router
 from app.routers.review import router as review_router
 from app.routers.approvals import router as approvals_router
+from app.routers.metrics import router as metrics_router
 from app.routers.clock import router as clock_router
 from app.routers.settings import router as settings_router
 from app.routers.shifts import router as shifts_router
@@ -49,6 +50,7 @@ app.include_router(review_router)
 app.include_router(settings_router)
 app.include_router(clock_router)
 app.include_router(approvals_router)
+app.include_router(metrics_router)
 app.mount(
     "/admin",
     StaticFiles(directory=ROOT / "static" / "admin", html=True),
