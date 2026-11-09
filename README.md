@@ -178,12 +178,15 @@ Phase 2 kiosk uses `/api/scan` + `/api/clock`.
 | Page | URL |
 | --- | --- |
 | Sign in | <http://localhost:8000/admin/login.html> |
-| Dashboard / staff | <http://localhost:8000/admin/> |
+| Dashboard | <http://localhost:8000/admin/dashboard.html> |
+| Staff | <http://localhost:8000/admin/> |
+| Person (linked from names) | <http://localhost:8000/admin/person.html?id=...> |
 | Enrolment | <http://localhost:8000/admin/enrol.html> |
 | Attendance | <http://localhost:8000/admin/attendance.html> |
 | Review queue | <http://localhost:8000/admin/review.html> |
 | Approvals & missing clock-outs | <http://localhost:8000/admin/approvals.html> |
-| Shifts (patterns/assign/exceptions/preview) | <http://localhost:8000/admin/shifts/index.html> |
+| Reports | <http://localhost:8000/admin/reports.html> |
+| Shifts (People + Schedules) | <http://localhost:8000/admin/shifts/index.html> |
 | Settings | <http://localhost:8000/admin/settings.html> |
 | Audit log | <http://localhost:8000/admin/audit.html> |
 
@@ -194,198 +197,114 @@ clock/enrolment reads use live values where applicable): `match_threshold`, `amb
 `duplicate_threshold` (enrolment cross-staff duplicate block, 0–1, default = `match_threshold`),
 `cooldown_seconds`, `work_start`, `grace_minutes`, `review_retention_days`, `spoof_challenge`,
 `missing_close_hours` (hours after shift end before an open session is auto-closed as missing
-clock-out; default 4).
+clock-out; default 4), and follow-up rule `followup_late_count`/`followup_period_days` (default 3/30,
+flag N+ late arrivals in a period; validated/audited).
 
 ## Dashboard, metrics, and reports
 
-**Metric definitions (shift-aware; `app/routers/attendance.py`):**
-- **`active_staff`** — count of `Staff` with `active` and not `anonymised`.
-- **`present_today`** — number of *scheduled* staff (a shift resolves for `today_local` via
-  exception→personal→shared) who have a non-undone, non-`missing_clock_out` `in` in today’s local
-  UTC window. Counted **against the assigned shift** (present ∩ scheduled).
-- **`absent_today`** — `scheduled - present_today` (absent only when a shift is assigned).
-- **`late_arrivals`** — staff whose first non-undone/non-missing `in` today is after
-  **shift start + `grace_min`** (honors stored `flag='late'`); falls back to global
-  `work_start`/`grace_minutes` when no resolved shift.
-- **`missing_clock_out`** — count of today’s non-undone attendance rows with
-  `flag='missing_clock_out'` (auto-close rows whose timestamp falls in the window).
-- **Recognition (today):** `recognition_attempts_today`, `matched_today`,
-  `recognition_success_rate = matched/attempts` (null if none). All in the server `TIMEZONE`’s
-  local day (`date_local`/`timezone`).
+**Metric definitions (shift-aware).** Attendance resolves against the schedule (exception → personal
+→ assigned shared → none). A day is **absent** only once its shift **end has passed** (future/in-
+progress scheduled days are not absent). **Day off / not scheduled** excluded from absence.
+**Undone** (`undone_at`) ignored. **Night shifts** group by `shift_date` (start date). **Late** =
+first non-undone/non-`missing_clock_out` in after `shift start + grace_min` (honors `flag='late'`).
+**On-time rate** = on-time clock-ins / clock-ins. **Attendance rate** = present / scheduled ended
+days. **Hours worked** = completed in→out pairs minus `break_min`; **missing clock-outs counted
+separately and excluded from hours** (never worked time). **Overtime** = count/flag (minute-level
+duration not stored; `overtime_hours` 0.0). Server `TIMEZONE`.
 
-**Dashboard** (`GET /api/admin/attendance/dashboard`, `static/admin/dashboard.html` +
-`static/admin/js/dashboard.js`) surfaces the metrics above (active staff, present/absent vs
-assigned shift, late, missing clock-out, recognition attempts/matched/rate).
+**Today KPIs** (`GET /api/admin/metrics/summary`, `/api/admin/attendance/dashboard`): present
+(scheduled + valid in), `absent_so_far` (scheduled, ended, no in), late, `currently_clocked_in`,
+`missing_clock_outs`, `pending_approvals`, plus range attendance/on-time rate, total hours,
+late/overtime counts.
 
-**Reports/exports:** `GET /api/admin/attendance` (filters), `GET /export.csv` (includes
-`shift_date,flag,edited_by,edit_reason`), `GET /report/monthly.csv` (per staff/month:
-days_present, late_arrivals, early_departures, overtime_count, missing_clock_outs, hours_worked
-from in→out minus break — **missing clock-outs excluded from hour pairing/totals** — and
-unpaired_in_days; grouped by `shift_date` with a buffer so night shifts are not split). History is
-viewed via the Attendance list/exports and the Shifts **People → History** panel (time-ordered
-assignments, personal schedule versions, day changes); there is no separate per-person profile page.
+**Dashboard** (`static/admin/dashboard.html` + `js/dashboard.js`, Chart.js 4.4.7 **vendored**
+`static/vendor/chart.umd.min.js`, no CDN): range (Today/7/30/Custom) + department filter (all);
+KPI links; charts (daily trend Present/Late/Absent, arrival histogram vs shift start, late by
+weekday, hours/attendance rate by department) — text titles/axis labels, patterned fills (not
+colour-only), **View as table**, loading/empty/error; ranked lists with person links. Data:
+`/api/admin/metrics/{summary,trend,breakdown,arrivals,people}` (admin/manager, manager dept-scoped,
+366-day cap, constant queries). `/api/admin/metrics/insights` (2D plain rules, max 5) exists; the
+dashboard Insights UI panel is hidden.
 
-**Follow-up rules (operational, not automated notifications):** missing clock-outs are auto-closed
-`missing_close_hours` after shift end (default 4) flagged `missing_clock_out` and **never counted
-as worked time** — a manager corrects with a required reason (Approvals/missing-clock-out queue,
-dept-scoped, audited). Late/early/out-of-window cases follow the shift decision/approval flow;
-blocked kiosk actions can raise an approval request for manager review.
+**Person page** (`static/admin/person.html?id=`, `GET /api/admin/metrics/person/{id}`,
+`/person/{id}/export.csv`, manager dept-scoped): range; summary cards (attendance/on-time rate,
+late count + **avg late minutes**, hours, overtime, early departures, missing clock-outs); month
+calendar **coloured + text-labelled** (on time/late/absent/day off/missing clock-out/not
+scheduled); arrival-offset-by-day line chart (min vs shift start, negative=early); events table
+with flags + **manager edits/reasons**; current schedule + **source**; **Export this person’s CSV**
++ **print-friendly view**. Linked from dashboard/staff/attendance/reports names.
 
-Environment variables (development defaults):
+**Reports** (`static/admin/reports.html`, `GET /api/admin/metrics/reports/late-arrivals|attendance-summary`,
+`format=json|csv`, manager dept-scoped): late-arrivals and attendance-summary for any range/
+department; **CSV export matches on-screen numbers/totals exactly** (same payload + `TOTAL` row).
+Existing: `GET /api/admin/attendance/export.csv`, `/report/monthly.csv` (shift-aware; missing
+clock-outs excluded from hours; night shifts by `shift_date`).
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `APP_ENV` | `development` | `development`/`dev`/`test`/`local` allow the dev default secret; other values require a real `SECRET_KEY` |
-| `DATABASE_URL` | `sqlite:///./attendance.db` | SQLAlchemy database URL |
-| `SECRET_KEY` | dev placeholder (dev only) | Reserved for future signed values; **must be set to a non-default value outside development** |
-| `MATCH_THRESHOLD` | `0.363` | Minimum face-match score (SFace cosine similarity) |
-| `AMBIGUITY_MARGIN` | `0.05` | Best-vs-second gap below this is treated as ambiguous |
-| `COOLDOWN_SECONDS` | `60` | Duplicate scan window for the same person |
-| `MAX_FAILED_ATTEMPTS` | `5` | Failed admin logins before lockout |
-| `LOCKOUT_MINUTES` | `5` | Admin lockout duration |
-| `SESSION_TIMEOUT_MINUTES` | `30` | Server-side admin session lifetime |
-| `SESSION_COOKIE_SECURE` | `false` | Set `true` when serving over HTTPS |
-| `REVIEW_RETENTION_DAYS` | `7` | Retention for review-queue frames (startup/cleanup) |
-| `TIMEZONE` | `UTC` | Attendance day timezone |
-| `MIN_FACE_WIDTH` | `120` | Minimum detected face width (px) |
-| `BLUR_THRESHOLD` | `100.0` | Laplacian variance threshold for blur |
-| `WORK_START` | `09:00` | Late boundary base (monthly report) |
-| `GRACE_MINUTES` | `15` | Late grace (monthly report) |
-| `MAX_UPLOAD_BYTES` | `5242880` | Upload size limit (kiosk image/challenge, enrolment images) |
-
-## How to run tests
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -v
-```
-
-The 6 `tests/test_recognition.py` skips are expected when real fixture images/models are not
-available in that context. Warnings are from `fastapi`/`starlette` `TestClient` deprecations.
-
-## How to run the evaluation
-
-Evaluation uses the **same** `app.recognition.Recognizer` analyse/embed path as the app and does
-**not** invent images or results.
-
-Input layout (gitignored):
-
-```text
-eval_data/<person>/enrol/*.jpg
-eval_data/<person>/<condition>/*.jpg   (e.g. normal, dim, backlit, glasses, angle, other_day)
-eval_data/spoof/<person>/*.jpg         (optional)
-```
-
-Run:
-
-```powershell
-.\.venv\Scripts\python.exe -m scripts.evaluate --help
-.\.venv\Scripts\python.exe -m scripts.evaluate --data eval_data --out eval_results --steps 101
-```
-
-Outputs in `eval_results/<timestamp>/`: `results.csv`, `sweep.csv`, `metrics.json` (includes the
-lowest threshold where FAR is 0 on the sample and FRR at that point), `score_histogram.png`
-(genuine vs impostor), `far_frr_curve.png`. Probe images failing quality checks are listed
-separately and excluded from scoring. If `--data` is missing, the script exits with code 2 and
-states that no results were invented.
-
-## Demo seed (no fake faces)
-
-Creates staff records only from names you pass in (no images, no embeddings):
-
-```powershell
-python scripts/seed_demo.py "Ada Lovelace" "Grace Hopper" --prefix DEMO
-```
-
-## Privacy / security notes
-
-- Enrolment/sign-in uploads are read in memory and **not saved** (review frames are saved only for
-  rejected/ambiguous attempts per the review-queue threshold/retention rules). Uploads are
-  size-limited (`MAX_UPLOAD_BYTES`).
-- No secrets or embeddings/vectors are logged or printed by app/scripts. Passwords are hashed
-  (argon2); the create-admin script never prints passwords.
-- `SECRET_KEY` has no insecure default outside development (`APP_ENV` not a dev/test value raises).
-- Staff deletion anonymises the record, removes embeddings and consent, and keeps attendance
-  history (per data model).
+**Follow-up rules (configurable, audited; prompt for conversation, not an automatic penalty).**
+`followup_late_count`/`followup_period_days` (default **3 in 30**, validated/audited) flag **N+ late
+arrivals in the period** with a **“Needs follow-up”** badge on dashboard/reports/person
+(`GET /api/admin/metrics/followup`; `needs_followup`/`followup` on responses). UI wording: prompt for
+a conversation, not an automatic penalty. **No automated notifications.** Operational follow-up via
+Approvals/missing-clock-out queue (auto-close `missing_close_hours` after shift end, default 4,
+`missing_clock_out` never worked time; manager corrects with required reason, audited).
 
 ## Known limitations
 
-- **Small test sample:** recognition quality/thresholds depend on real evaluation data; automated
-  tests use mocks/synthetic cases and do not certify real-world accuracy.
-- **Lighting sensitivity:** detection/embedding quality degrades in dim/backlit or poor camera
-  conditions; quality checks (face size/blur) reduce but do not eliminate this.
-- **No certified anti-spoofing:** the optional head-turn challenge helps against still photos but
-  is not certified and may not stop video replay or sophisticated attacks.
-- **Single site:** designed for one office/site (single SQLite DB, in-memory sessions, local kiosk
-  assumptions), not multi-site/high-availability deployment.
-
-## Layout
-
-```text
-app/          FastAPI application, routers, models, recognition/rules
-static/       HTML, CSS and JavaScript (admin + kiosk)
-models/       Downloaded OpenCV ONNX models (not committed)
-scripts/      download_models, create_admin, seed_demo, evaluate, cleanup, spike
-tests/        pytest tests
-eval_data/    Local evaluation images (not committed)
-eval_results/ Evaluation outputs (not committed)
-var/          Runtime files such as temporary review frames
-```
-## Known limitations
-
-- **Not certified anti-spoofing.** The optional head-turn challenge (landmark-based) reduces still-
-  photo risk but may not stop a video replay; treat it as a liveness aid, not a security guarantee.
-- **One shift per person per day.** No split shifts/rosters/leave management; resolution is
-  exception -> personal -> assigned shared -> none.
-- **Token & undo windows.** Scan issues a single-use clock token valid **20 seconds** (bound to
-  person + kiosk); after a successful clock the kiosk allows **Undo for 10 seconds** (undo sets
-  `undone_at`, never deletes).
-- **Overtime margin is 0** in the clock flow (`evaluate(..., margin_overtime=0)`), so overtime is
-  flagged at shift end.
-- **Missing clock-outs are never counted as worked time automatically.** Auto-close writes a
-  `missing_clock_out` out at the cut-off (audited) but it is excluded from hour pairing/totals; a
-  manager must enter the real time with a required reason.
-- **Sessions in memory.** Admin sessions/CSRF are in-process and do not survive restart.
-- **No password change UI.** Rotate admin passwords by updating the DB (hash with the app's bcrypt).
-- **SQLite `check_same_thread=False`.** Suitable for a single-site app; avoid heavy concurrent
-  writers.
-- **Legacy endpoint kept.** `POST /api/signin` (calendar-day in/out) remains for compatibility; the
-  Phase 2 kiosk uses `/api/scan` + `/api/clock`.
-- **Face model quality depends on enrolment images** and lighting/camera; ambiguous/no-match cases go
-  to the review queue with saved frames (retention-limited).
+- **Not certified anti-spoofing.** Optional head-turn challenge helps against still photos but may
+  not stop video replay; a liveness aid, not a security guarantee.
+- **One shift per person per day.** No split shifts/rosters/leave; resolution exception → personal
+  → assigned shared → none.
+- **Token & undo windows.** Single-use clock token **20s** (person+kiosk); **Undo 10s** after success
+  (`undone_at`, never deletes).
+- **Overtime margin 0** in clock flow; overtime reported as **count** (`overtime_hours` 0.0).
+- **Missing clock-outs never counted as worked time.** Auto-close audited; manager enters real time
+  with a required reason.
+- **Sessions in memory** (no restart survival). **No password change UI.** **SQLite
+  `check_same_thread=False`** (single-site). Legacy `POST /api/signin` kept (Phase 2 uses `/api/scan`
+  + `/api/clock`). Enrolment/face quality depends on images/lighting; ambiguous/no-match → review
+  queue (retention-limited). **Single site** (no multi-site/HA).
 
 ## Recognition evaluation
 
-The recognition evaluator uses the **same `Recognizer`/threshold path as the app**
-(`scripts/evaluate.py` -> `app/eval_metrics.py`). In this environment, `eval_data/` contains **no
-genuine/impostor pairs**, so runs produce `enrolled=0 genuine=0 impostor=0 rejected=0 FAR=0 FRR=0`
-(`eval_results/20261108T181401Z/`, re-run `eval_results/20261109T113446Z/`); missing data exits `2`.
-**No FAR/FRR results were fabricated and no baseline was altered; recognition logic/results are
-unchanged by Phase 2/Phase 3/kiosk UI work** (no recognizer/threshold-path changes). To produce real
-FAR/FRR, populate `eval_data/` and re-run `scripts/evaluate.py`.
+Uses the **same `Recognizer`/threshold path as the app** (`scripts/evaluate.py` → `app/eval_metrics.py`).
+`eval_data/` has **no genuine/impostor pairs**; runs yield `enrolled=0 genuine=0 impostor=0 rejected=0
+FAR=0 FRR=0` (`20261108T181401Z`, `20261109T113446Z`, `20261109T121932Z`, re-run `20261109T135936Z`);
+missing data exits `2`. **No FAR/FRR fabricated, no baseline altered; recognition logic/results
+unchanged** by Phase 2/3/kiosk UI/Steps 1B/2A–2C/2D/3A/3B. Populate `eval_data/` and re-run for real FAR/FRR.
 
 ## Everything not done (Step 3C status / out of scope)
 
-- **Step J (optional, not implemented):** read-only weekly calendar by department + "working today"
-  list UI built from `/api/admin/shifts/people`.
-- **No separate per-person profile page** and **no automated follow-up notifications/reminders**
-  (follow-up is handled via the Approvals/missing-clock-out queue and manager correction;
-  attendance/history available via list/exports and People → History).
-- **`apply` of `scripts/cleanup_personal_patterns.py` on the real DB not run** (dry-run reported
-  0 personal patterns; apply requires explicit confirmation + DB backup).
-- **Real recognition FAR/FRR not measured** (no labeled `eval_data/`); eval re-runs produced
-  `enrolled=0/genuine=0/impostor=0` (`20261108T181401Z`, `20261109T113446Z`, `20261109T121932Z`).
-  Recognition logic/results unchanged by Phase 2/3/kiosk UI/Step 1B work.
-- **Manual browser/QA** of new People/Schedules UI, enrolment duplicate/mixed-person refusals,
-  kiosk/camera flows, and dashboard rendering not automated here (dashboard metric formulas verified
-  against a hand-built 3-person/2-week dataset in a temp DB; see test notes below).
-- **Pushing to `origin/main`** (branch ahead locally; commits not pushed).
-- **Docx sync** — Phase 2/3 `.docx/.md` guides left untracked as found. **`_wtest.py`** scratch
-  file left untracked (not committed).
+- **Step J (optional, not implemented):** read-only weekly calendar by department + “working today”
+  (from `/api/admin/shifts/people`).
+- **No automated follow-up notifications/reminders** (badge/prompt for conversation + approvals/
+  missing-clock-out queue). **Insights UI panel hidden** (endpoint `/api/admin/metrics/insights`
+  exists).
+- **`scripts/cleanup_personal_patterns.py --apply` on the real DB not run** (dry-run 0; needs
+  confirmation + DB backup).
+- **Real recognition FAR/FRR not measured** (no labeled `eval_data/`); eval runs all zeros
+  (`20261108T181401Z`–`20261109T135936Z`). Recognition unchanged.
+- **Manual browser/QA** of People/Schedules, enrolment duplicate/mixed-person, kiosk/camera,
+  dashboard/person/reports rendering not automated. **Metric numbers verified** against a hand-built
+  **3-person/2-week** dataset (one late, one absent, one night shift, one missing clock-out) via
+  `app.metrics` — comparison table (hand-expected vs actual, all matched):
+  | Subject | Metric | Hand-expected | Actual (`app.metrics`) |
+  | --- | --- | ---:| ---:|
+  | P1 Late (Eng, Mon–Fri x2, grace 10, break 60) | present / absent | 10 / 0 | 10 / 0 |
+  | P1 (late Tue 2026-01-06 08:20) | late / late_min / on_time_rate / hours | 1 / 20 / 0.9 / 79.6667 | 1 / 20 / 0.9 / 79.6667 |
+  | P2 Absent (Eng, absent Wed 2026-01-07) | present / absent / attendance_rate / hours | 9 / 1 / 0.9 / 72.0 | 9 / 1 / 0.9 / 72.0 |
+  | P3 Night (Ops, 22:00–06:00 overnight, break 30, missing out 2026-01-08 shift) | present / absent / missing / hours | 10 / 0 / 1 / 67.5 | 10 / 0 / 1 / 67.5 |
+  | Team (3 people, 10 ended weekdays each) | sched_ended / present / absent / late / hours / missing | 30 / 29 / 1 / 1 / 219.1667 / 1 | 30 / 29 / 1 / 1 / 219.1667 / 1 |
+  (Range 2026-01-05–2026-01-16, `now` after end. Night shift groups by `shift_date`; missing clock-out
+  excluded from hours. Dashboard today-KPI formulas previously verified vs a hand-built temp-DB case.)
+- **Metrics scoping:** `/api/admin/metrics/*` admin/manager + dept scope; existing
+  `/api/admin/attendance/dashboard|export.csv|report/monthly.csv` still `require_admin` (unchanged).
+- **Pushing to `origin/main`** (ahead locally). **Local artifacts untracked:** `.kilo/`, `_wtest.py`,
+  `attendance.db.bak-*`, Phase 2/3 `.docx/.md`.
 - **Out of scope (product):** split shifts, rosters, leave/swaps, staff self-service; multiple
-  shifts/person/day; overtime margin configuration in UI (clock flow uses margin 0).
-- **Production hardening unchanged:** HTTPS/proxy, persistent sessions, Alembic, SQLite
-  concurrency/WSGI for heavier load, secret rotation, password-change UI, auto-scheduling of
-  `scripts/close_sessions.py` (30-min proposed, not installed).
+  shifts/person/day; overtime-minute config (margin 0). Production hardening unchanged (HTTPS/proxy,
+  persistent sessions, Alembic, heavier SQLite/WSGI, secret rotation, password-change UI, scheduling
+  `scripts/close_sessions.py`).
+
 
 ## License
 
