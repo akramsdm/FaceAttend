@@ -216,6 +216,13 @@ class Pattern(Base):
     grace_min: Mapped[int] = mapped_column(Integer, default=10)
     break_min: Mapped[int] = mapped_column(Integer, default=0)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Phase 3
+    kind: Mapped[str] = mapped_column(String(20), default="shared", server_default="shared")
+    based_on_pattern_id: Mapped[int | None] = mapped_column(
+        ForeignKey("patterns.id"), index=True
+    )
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("admins.id"), index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     days: Mapped[list["PatternDay"]] = relationship(
