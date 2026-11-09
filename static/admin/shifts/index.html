@@ -3,8 +3,33 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Shift patterns - Face Attendance</title>
+    <title>Schedules - Face Attendance</title>
     <link rel="stylesheet" href="../css/admin.css" />
+    <style>
+      .tabs { display:flex; gap:.25rem; border-bottom:1px solid var(--line); margin-bottom:1rem; }
+      .tab-btn { background:transparent; border:0; border-bottom:3px solid transparent; padding:.55rem .85rem; font:inherit; cursor:pointer; color:var(--muted); border-radius:6px 6px 0 0; }
+      .tab-btn[aria-selected="true"] { color:var(--text); font-weight:700; border-bottom-color:var(--accent); }
+      .tab-btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+      .tab-panel[hidden] { display:none; }
+      .week-strip { display:inline-grid; grid-template-columns:repeat(7, minmax(3.2rem,auto)); gap:2px; font-size:.78rem; }
+      .week-strip span { padding:.15rem .25rem; border:1px solid var(--line); border-radius:4px; background:#fbfcfe; text-align:center; white-space:nowrap; }
+      .week-strip span.off { color:var(--muted); background:#f3f5f8; }
+      .week-strip span.night { border-style:dashed; }
+      .badge { display:inline-block; font-size:.78rem; font-weight:700; padding:.05rem .45rem; border-radius:999px; border:1px solid currentColor; margin-left:.25rem; vertical-align:middle; }
+      .badge-custom { color:#17487d; background:#e9f0f8; }
+      .badge-changed { color:#7a5200; background:#fff4d6; }
+      .row-sel { width:1.1rem; height:1.1rem; }
+      details.advanced { margin:.5rem 0; }
+      details.advanced > summary { cursor:pointer; font-weight:600; }
+      .drawer { border:1px solid var(--line); border-radius:8px; padding:1rem; background:#fbfcfe; margin-top:.75rem; }
+      .day-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr)); gap:.5rem; }
+      .day-cell { border:1px solid var(--line); border-radius:6px; padding:.5rem; background:#fff; }
+      .day-cell h4 { margin:0 0 .35rem; font-size:.95rem; }
+      .day-cell label { display:block; font-size:.85rem; margin-top:.2rem; }
+      .day-cell input[type="time"], .day-cell input[type="text"] { width:100%; }
+      .history-item { border-bottom:1px solid var(--line); padding:.4rem 0; }
+      .history-item:last-child { border-bottom:0; }
+    </style>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
@@ -17,7 +42,7 @@
           <a href="../enrol.html">Enrolment</a>
           <a href="../attendance.html">Attendance</a>
           <a href="../review.html">Review queue</a>
-          <a href="index.html">Shifts</a>
+          <a href="index.html" aria-current="page">Schedules</a>
           <a href="../settings.html">Settings</a>
           <a href="../audit.html">Audit log</a>
         </nav>
@@ -28,52 +53,110 @@
       </div>
     </header>
     <main id="main" class="page">
-      <div class="page-head"><div><h1>Shift patterns</h1><p>Manage patterns (weekly grid), create personal copies, and navigate to assignments, exceptions and preview.</p></div></div>
-      <p class="small"><a href="index.html">Patterns</a> · <a href="assign.html">Assign</a> · <a href="exceptions.html">Exceptions</a> · <a href="preview.html">Preview week</a></p>
+      <div class="page-head">
+        <div>
+          <h1>Schedules</h1>
+          <p>See who works when, assign schedules, and manage day changes. Shared schedule templates are on the Schedules tab.</p>
+        </div>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Schedule views">
+        <button type="button" class="tab-btn" id="tab-people" role="tab" aria-selected="true" aria-controls="panel-people">People</button>
+        <button type="button" class="tab-btn" id="tab-schedules" role="tab" aria-selected="false" aria-controls="panel-schedules" tabindex="-1">Schedules</button>
+      </div>
       <p id="message" class="message" role="status" aria-live="polite"></p>
 
-      <section class="panel" aria-labelledby="new-title">
-        <h2 id="new-title">Create pattern</h2>
-        <form id="pattern-form" novalidate>
-          <input type="hidden" id="pattern-id" value="" />
-          <div class="toolbar">
-            <div class="field"><label for="p-name">Name</label><input id="p-name" type="text" maxlength="100" required /></div>
-            <div class="field"><label for="p-early">Early window (min)</label><input id="p-early" type="number" min="0" max="240" value="30" /></div>
-            <div class="field"><label for="p-grace">Grace (min)</label><input id="p-grace" type="number" min="0" max="240" value="10" /></div>
-            <div class="field"><label for="p-break">Break (min)</label><input id="p-break" type="number" min="0" max="480" value="0" /></div>
+      <section id="panel-people" class="tab-panel" role="tabpanel" aria-labelledby="tab-people">
+        <section class="panel" aria-labelledby="filters-title">
+          <h2 id="filters-title">People</h2>
+          <form id="filters-form" class="toolbar" novalidate>
+            <div class="field"><label for="f-week">Week starting</label><input id="f-week" type="date" /></div>
+            <div class="field"><label for="f-dept">Department</label><input id="f-dept" type="text" placeholder="Any" /></div>
+            <div class="field"><label for="f-schedule">Schedule</label><select id="f-schedule"><option value="">Any</option></select></div>
+            <div class="field"><label for="f-search">Search</label><input id="f-search" type="search" placeholder="Name or code" /></div>
+            <div class="field" style="align-self:center; padding-top:1.4rem;">
+              <label><input id="f-working" type="checkbox" /> Working today</label>
+            </div>
+            <button class="button secondary" type="submit">Apply filters</button>
+          </form>
+          <div class="button-row" style="margin-top:0">
+            <button class="button secondary" type="button" id="bulk-assign-open">Assign schedule…</button>
+            <button class="button secondary" type="button" id="holiday-open">Holiday…</button>
           </div>
-          <h3>Weekly grid (Mon–Sun)</h3>
-          <div class="table-wrap"><table aria-label="Weekly pattern grid">
-            <thead><tr><th scope="col">Day</th><th scope="col">On</th><th scope="col">Start (HH:MM)</th><th scope="col">End (HH:MM)</th><th scope="col">Overnight</th></tr></thead>
-            <tbody id="grid-body"></tbody>
-          </table></div>
-          <p id="form-error" class="message error" role="alert"></p>
-          <div class="button-row">
-            <button class="button" type="submit" id="save-pattern">Save pattern</button>
-            <button class="button secondary" type="button" id="cancel-edit" hidden>Cancel edit</button>
+          <div id="bulk-panel" class="drawer" hidden aria-labelledby="bulk-title">
+            <h3 id="bulk-title">Assign schedule</h3>
+            <p class="help">Tick people in the table, choose a schedule, then preview who is affected before applying. Assigning ends each person's current schedule the day before the start date.</p>
+            <form id="bulk-form" novalidate>
+              <div class="toolbar">
+                <div class="field"><label for="b-schedule">Schedule</label><select id="b-schedule" required></select></div>
+              </div>
+              <details class="advanced"><summary>Advanced</summary>
+                <div class="field" style="max-width:14rem"><label for="b-start">Start date</label><input id="b-start" type="date" /></div>
+              </details>
+              <p id="b-error" class="message error" role="alert"></p>
+              <div id="b-preview" class="message info" aria-live="polite"></div>
+              <div class="button-row">
+                <button class="button secondary" type="button" id="b-preview-btn">Preview impact</button>
+                <button class="button" type="submit" id="b-apply" disabled>Confirm assignment</button>
+                <button class="button secondary" type="button" id="b-cancel">Cancel</button>
+              </div>
+            </form>
           </div>
-        </form>
-      </section>
-      <section class="panel" aria-labelledby="list-title">
-        <h2 id="list-title">Patterns</h2>
-        <p class="small muted">Managers can edit/delete patterns they own and create personal copies. Shared default patterns are read-only for managers.</p>
-        <div class="table-wrap"><table>
-          <thead><tr><th scope="col">Name</th><th scope="col">Owner</th><th scope="col">Early/Grace/Break</th><th scope="col">Actions</th></tr></thead>
-          <tbody id="pattern-rows"><tr><td colspan="4">Loading…</td></tr></tbody>
-        </table></div>
-      </section>
-      <section class="panel" aria-labelledby="copy-title">
-        <h2 id="copy-title">Customise for this person</h2>
-        <form id="copy-form" class="toolbar" novalidate>
-          <div class="field"><label for="copy-pattern">Pattern</label><select id="copy-pattern"></select></div>
-          <div class="field"><label for="copy-staff">Staff member</label><select id="copy-staff"></select></div>
-          <button class="button" type="submit">Create personal copy</button>
-        </form>
-        <p id="copy-error" class="message error" role="alert"></p>
+          <div id="holiday-panel" class="drawer" hidden aria-labelledby="holiday-title">
+            <h3 id="holiday-title">Holiday (day off)</h3>
+            <p class="help">Set a day off for everyone or a department. One day change per person per day; a reason is required.</p>
+            <form id="holiday-form" novalidate>
+              <div class="toolbar">
+                <div class="field"><label for="h-scope">For</label>
+                  <select id="h-scope"><option value="everyone">Everyone</option><option value="department">A department</option></select></div>
+                <div class="field" id="h-dept-wrap" hidden><label for="h-dept">Department</label><input id="h-dept" type="text" /></div>
+                <div class="field"><label for="h-start">Start date</label><input id="h-start" type="date" required /></div>
+                <div class="field"><label for="h-end">End date</label><input id="h-end" type="date" required /></div>
+              </div>
+              <div class="field"><label for="h-reason">Reason (required)</label><input id="h-reason" type="text" maxlength="500" required /></div>
+              <p id="h-error" class="message error" role="alert"></p>
+              <div id="h-preview" class="message info" aria-live="polite"></div>
+              <div class="button-row">
+                <button class="button secondary" type="button" id="h-preview-btn">Preview impact</button>
+                <button class="button" type="submit" id="h-apply" disabled>Apply holiday</button>
+                <button class="button secondary" type="button" id="h-cancel">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="people-table-title">
+          <h2 id="people-table-title">Schedule overview</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col"><span class="visually-hidden">Select</span></th>
+                  <th scope="col">Person</th>
+                  <th scope="col">Department</th>
+                  <th scope="col">Schedule</th>
+                  <th scope="col">Week</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="people-rows"><tr><td colspan="6">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="row-action-panel" class="panel" hidden aria-live="polite">
+          <div id="row-action-body"></div>
+        </section>
       </section>
 
+      <section id="panel-schedules" class="tab-panel" role="tabpanel" aria-labelledby="tab-schedules" hidden>
+        <section class="panel">
+          <h2>Schedules</h2>
+          <p class="muted">Shared schedule templates (Step I). Personal copies do not appear here. Use the Patterns and week editor on this tab once Step I is applied.</p>
+          <p><a class="button secondary" href="assign.html">Assign (legacy)</a> <a class="button secondary" href="exceptions.html">Day changes (legacy)</a> <a class="button secondary" href="preview.html">Preview week (legacy)</a></p>
+        </section>
+      </section>
     </main>
     <script src="../js/common.js"></script>
-    <script src="../js/shifts_patterns.js"></script>
+    <script src="../js/shifts_people.js"></script>
   </body>
 </html>
