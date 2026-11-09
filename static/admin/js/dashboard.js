@@ -186,6 +186,7 @@
     } catch (e) { /* non-fatal */ }
   }
 
+
   async function load() {
     setMsg("Loading dashboard…", "info");
     ["trend", "arrivals", "weekday", "hours", "rate"].forEach(function (k) { state(k, "Loading…"); });

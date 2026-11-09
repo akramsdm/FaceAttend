@@ -208,3 +208,156 @@ def test_daily_series_includes_day():
     rows = [row(1, "in", datetime(2026, 1, 5, 8, 0), shift_date=DAY)]
     ser = daily_series([PERSON], (DAY, DAY), rows, resolve=lambda pid, d: sh, now=datetime(2026, 1, 5, 18, 0))
     assert len(ser) == 1 and ser[0]["date"] == DAY and ser[0]["present"] == 1
+
+
+# ------------------------------- insights (2D) --------------------------
+
+from app.metrics import compute_insights, late_arrival_hours, _prev_equal_period
+
+
+def _team(person_list, rng, rows, resolve, now):
+    return team_metrics(person_list, rng, rows, resolve=resolve, now=now)
+
+
+def test_insight_late_vs_previous_percent_and_min_sample_guard():
+    sh = shift(datetime(2026, 1, 5, 8, 0), datetime(2026, 1, 9, 17, 0), grace=10)
+    # spread a resolver over a week (Mon-Fri)
+    def res(pid, d):
+        s = datetime(d.year, d.month, d.day, 8, 0)
+        e = datetime(d.year, d.month, d.day, 17, 0)
+        return ResolvedShift(start=s, end=e, overnight=False, early_window=30, grace=10, break_min=0, source="shared", shift_date=d)
+    people = [{"id": i, "name": f"P{i}", "department": "Eng"} for i in range(1, 13)]
+    # current week: 10 late arrivals (>=10 events total when combined appropriately)
+    rows_now = [row(i, "in", datetime(2026, 1, 6, 8, 20), flag="late", shift_date=date(2026, 1, 6)) for i in range(1, 11)]
+    # previous equal week: 5 late
+    rows_prev = [row(i, "in", datetime(2025, 12, 30, 8, 20), flag="late", shift_date=date(2025, 12, 30)) for i in range(1, 6)]
+    now = datetime(2026, 1, 10, 0, 0)
+    cur = (date(2026, 1, 5), date(2026, 1, 9)); prev = (date(2025, 12, 29), date(2026, 1, 2))
+    tn = _team(people, cur, rows_now, res, now); tp = _team(people, prev, rows_prev, res, now)
+    ins = compute_insights(start=cur[0], end=cur[1], department=None, team_now=tn, team_prev=tp,
+                           weekday_now=lateness_by_weekday(people, cur, rows_now, resolve=res),
+                           late_hours=late_arrival_hours(people, cur, rows_now, resolve=res),
+                           people_now=[person_metrics(p, cur, rows_now, resolve=res, now=now) for p in people],
+                           dept_groups=team_metrics(people, cur, rows_now, resolve=res, now=now, group_by="department"),
+                           recognition={"attempts": 0, "matched": 0, "rejected": 0, "success_rate": 0.0, "backlog": 0})
+    m = [x for x in ins if x["id"] == "late_vs_previous"]
+    assert m, ins
+    assert m[0]["numbers"]["current_late"] == 10 and m[0]["numbers"]["previous_late"] == 5
+    assert m[0]["numbers"]["percent_change"] == pytest.approx(100.0)
+    assert "flag=late" in m[0]["link"]
+
+
+def test_insight_late_vs_previous_hidden_below_min_sample():
+    def res(pid, d):
+        s = datetime(d.year, d.month, d.day, 8, 0); e = datetime(d.year, d.month, d.day, 17, 0)
+        return ResolvedShift(start=s, end=e, overnight=False, early_window=30, grace=10, break_min=0, source="shared", shift_date=d)
+    people = [{"id": 1, "name": "A", "department": "Eng"}]
+    now = datetime(2026, 1, 10, 0, 0)
+    cur = (date(2026, 1, 5), date(2026, 1, 9)); prev = (date(2025, 12, 29), date(2026, 1, 2))
+    rows_now = [row(1, "in", datetime(2026, 1, 6, 8, 20), flag="late", shift_date=date(2026, 1, 6))]  # 1
+    rows_prev = [row(1, "in", datetime(2025, 12, 30, 8, 20), flag="late", shift_date=date(2025, 12, 30))]  # 1, total 2 < 10
+    tn = _team(people, cur, rows_now, res, now); tp = _team(people, prev, rows_prev, res, now)
+    ins = compute_insights(start=cur[0], end=cur[1], department=None, team_now=tn, team_prev=tp,
+                           weekday_now=[], late_hours={}, people_now=[], dept_groups=[], recognition=None)
+    assert not [x for x in ins if x["id"] == "late_vs_previous"]
+
+
+def test_insight_weekday_and_hour_peak():
+    def res(pid, d):
+        s = datetime(d.year, d.month, d.day, 8, 0); e = datetime(d.year, d.month, d.day, 17, 0)
+        return ResolvedShift(start=s, end=e, overnight=False, early_window=30, grace=10, break_min=0, source="shared", shift_date=d)
+    people = [{"id": i, "name": f"P{i}", "department": "Eng"} for i in range(1, 5)]
+    now = datetime(2026, 1, 10, 0, 0)
+    cur = (date(2026, 1, 5), date(2026, 1, 9))  # 5=Mon
+    rows = [
+        row(1, "in", datetime(2026, 1, 5, 9, 15), flag="late", shift_date=date(2026, 1, 5)),  # Mon 09
+        row(2, "in", datetime(2026, 1, 5, 9, 20), flag="late", shift_date=date(2026, 1, 5)),  # Mon 09
+        row(3, "in", datetime(2026, 1, 6, 8, 20), flag="late", shift_date=date(2026, 1, 6)),  # Tue 08
+    ]
+    tn = _team(people, cur, rows, res, now)
+    ins = compute_insights(start=cur[0], end=cur[1], department=None, team_now=tn, team_prev=None,
+                           weekday_now=lateness_by_weekday(people, cur, rows, resolve=res),
+                           late_hours=late_arrival_hours(people, cur, rows, resolve=res),
+                           people_now=[person_metrics(p, cur, rows, resolve=res, now=now) for p in people],
+                           dept_groups=[], recognition=None)
+    m = [x for x in ins if x["id"] == "late_peak_time"][0]
+    assert m["numbers"]["weekday"] == "Mon" and m["numbers"]["weekday_late"] == 2
+    assert m["numbers"]["peak_hour"] == 9 and m["numbers"]["peak_hour_late"] == 2
+    assert "09:00" in m["text"]
+
+
+def test_insight_staff_followup_thresholds():
+    def res(pid, d):
+        s = datetime(d.year, d.month, d.day, 8, 0); e = datetime(d.year, d.month, d.day, 17, 0)
+        return ResolvedShift(start=s, end=e, overnight=False, early_window=30, grace=10, break_min=0, source="shared", shift_date=d)
+    people = [{"id": 1, "name": "Latey", "department": "Eng"}, {"id": 2, "name": "Missy", "department": "Eng"}, {"id": 3, "name": "Ok", "department": "Eng"}]
+    cur = (date(2026, 1, 5), date(2026, 1, 9)); now = datetime(2026, 1, 10, 0, 0)
+    rows = [row(1, "in", datetime(2026, 1, d, 8, 20), flag="late", shift_date=date(2026, 1, d)) for d in (5, 6, 7)]  # 3 late
+    rows += [row(2, "in", datetime(2026, 1, 5, 8, 0), shift_date=date(2026, 1, 5)),
+             row(2, "out", datetime(2026, 1, 5, 22, 0), flag="missing_clock_out", shift_date=date(2026, 1, 5)),
+             row(2, "in", datetime(2026, 1, 6, 8, 0), shift_date=date(2026, 1, 6)),
+             row(2, "out", datetime(2026, 1, 6, 22, 0), flag="missing_clock_out", shift_date=date(2026, 1, 6))]
+    tn = _team(people, cur, rows, res, now)
+    per = [person_metrics(p, cur, rows, resolve=res, now=now) for p in people]
+    ins = compute_insights(start=cur[0], end=cur[1], department=None, team_now=tn, team_prev=None,
+                           weekday_now=[], late_hours={}, people_now=per, dept_groups=[], recognition=None)
+    m = [x for x in ins if x["id"] == "staff_followup"][0]
+    assert m["numbers"]["count"] == 2
+    ids = {s["staff_id"] for s in m["numbers"]["staff"]}
+    assert ids == {1, 2}
+
+
+def test_insight_low_department_more_than_10_points_below_overall():
+    def res(pid, d):
+        s = datetime(d.year, d.month, d.day, 8, 0); e = datetime(d.year, d.month, d.day, 17, 0)
+        return ResolvedShift(start=s, end=e, overnight=False, early_window=30, grace=10, break_min=0, source="shared", shift_date=d)
+    people = [{"id": 1, "name": "A", "department": "Eng"}, {"id": 2, "name": "B", "department": "Sales"}]
+    cur = (date(2026, 1, 5), date(2026, 1, 5)); now = datetime(2026, 1, 5, 23, 0)
+    rows = [row(1, "in", datetime(2026, 1, 5, 8, 0), shift_date=date(2026, 1, 5))]  # Eng present, Sales absent
+    tn = team_metrics(people, cur, rows, resolve=res, now=now)
+    dept = team_metrics(people, cur, rows, resolve=res, now=now, group_by="department")
+    ins = compute_insights(start=cur[0], end=cur[1], department=None, team_now=tn, team_prev=None,
+                           weekday_now=[], late_hours={}, people_now=[], dept_groups=dept, recognition=None)
+    m = [x for x in ins if x["id"] == "low_department_rate"][0]
+    assert m["numbers"]["departments"][0]["department"] == "Sales"
+    assert m["numbers"]["departments"][0]["gap_points"] == pytest.approx(50.0)
+
+
+def test_insight_recognition_health_success_rejected_backlog():
+    tn = {"late": 0, "attendance_rate": 1.0, "scheduled_ended": 1}
+    reco = {"attempts": 20, "matched": 10, "rejected": 10, "success_rate": 0.5,
+            "rejected_by_day": [{"date": "2026-01-05", "count": 10}], "backlog": 4}
+    ins = compute_insights(start=date(2026, 1, 5), end=date(2026, 1, 5), department=None,
+                           team_now=tn, team_prev=None, weekday_now=[], late_hours={}, people_now=[],
+                           dept_groups=[], recognition=reco)
+    m = [x for x in ins if x["id"] == "recognition_health"][0]
+    assert m["numbers"]["success_rate"] == 0.5 and m["numbers"]["rejected"] == 10 and m["numbers"]["backlog"] == 4
+    assert m["numbers"]["rejected_by_day"][0]["count"] == 10
+    assert m["link"] == "review.html"
+
+
+def test_insight_no_insight_case():
+    tn = {"late": 0, "attendance_rate": 1.0, "scheduled_ended": 5}
+    dept = [{"group": "Eng", "attendance_rate": 1.0, "scheduled_ended": 5}]
+    people_now = [{"staff_id": 1, "name": "A", "late": 1, "missing_clock_outs": 0, "attendance_rate": 1.0}]
+    # prev equal but total late events < 10 => no late-vs-prev; no peak (no late), no followup thresholds, dept gap 0, healthy recognition
+    reco = {"attempts": 10, "matched": 10, "rejected": 0, "success_rate": 1.0, "backlog": 0, "rejected_by_day": []}
+    ins = compute_insights(start=date(2026, 1, 5), end=date(2026, 1, 5), department=None,
+                           team_now=tn, team_prev={"late": 0}, weekday_now=[], late_hours={}, people_now=people_now,
+                           dept_groups=dept, recognition=reco)
+    assert ins == []
+
+
+def test_insight_capped_at_five_ordered_by_effect():
+    tn = {"late": 20, "attendance_rate": 0.5, "scheduled_ended": 10}
+    tp = {"late": 5}
+    weekday = [{"weekday": 0, "weekday_name": "Mon", "clock_ins": 5, "late": 5, "on_time": 0, "on_time_rate": 0.0, "lateness_rate": 1.0}]
+    dept = [{"group": "A", "attendance_rate": 0.2, "scheduled_ended": 5}, {"group": "B", "attendance_rate": 1.0, "scheduled_ended": 5}]
+    people_now = [{"staff_id": i, "name": f"P{i}", "late": 3, "missing_clock_outs": 2} for i in range(1, 4)]
+    reco = {"attempts": 10, "matched": 2, "rejected": 8, "success_rate": 0.2, "backlog": 5, "rejected_by_day": []}
+    ins = compute_insights(start=date(2026, 1, 5), end=date(2026, 1, 9), department=None,
+                           team_now=tn, team_prev=tp, weekday_now=weekday, late_hours={9: 5},
+                           people_now=people_now, dept_groups=dept, recognition=reco)
+    assert len(ins) <= 5
+    effects = [x["effect"] for x in ins]
+    assert effects == sorted(effects, reverse=True)

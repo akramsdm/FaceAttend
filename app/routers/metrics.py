@@ -19,13 +19,16 @@ from sqlalchemy.orm import Session, selectinload
 from app.db import get_session
 from app.metrics import (
     arrival_histogram as m_arrival_histogram,
+    compute_insights as m_compute_insights,
     daily_series as m_daily_series,
+    late_arrival_hours as m_late_arrival_hours,
     lateness_by_weekday as m_lateness_by_weekday,
     person_metrics as m_person_metrics,
     team_metrics as m_team_metrics,
     top_n as m_top_n,
+    _prev_equal_period,
 )
-from app.models import Admin, ApprovalRequest, Assignment, Attendance, Pattern, PatternDay, Setting, ShiftException, Staff
+from app.models import Admin, ApprovalRequest, Assignment, Attendance, Pattern, PatternDay, RecognitionAttempt, Setting, ShiftException, Staff
 from app.security import ROLE_ADMIN, ROLE_MANAGER, require_role
 from app.settings_store import DEFINITIONS, get_all, _coerce
 from app.shifts import ResolvedShift, resolve_shift
@@ -448,4 +451,75 @@ def person_detail(
         "metrics": pm,
         "days": status_list,
         "recent_events": recent_ev,
+    }
+
+
+def _recognition_health(db: Session, start: date, end: date, tz_name: str) -> dict[str, Any]:
+    zone = ZoneInfo(tz_name)
+    lo_local = datetime.combine(start, time.min, tzinfo=zone)
+    hi_local = datetime.combine(end + timedelta(days=1), time.min, tzinfo=zone)
+    lo = lo_local.astimezone(timezone.utc).replace(tzinfo=None)
+    hi = hi_local.astimezone(timezone.utc).replace(tzinfo=None)
+    attempts = db.scalars(
+        select(RecognitionAttempt).where(RecognitionAttempt.timestamp >= lo, RecognitionAttempt.timestamp < hi)
+    ).all()
+    total = len(attempts)
+    matched = sum(1 for a in attempts if a.outcome == "matched")
+    rejected = sum(1 for a in attempts if a.outcome != "matched")
+    by_day: dict[date, int] = defaultdict(int)
+    for a in attempts:
+        if a.outcome == "matched":
+            continue
+        ts = a.timestamp
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ld = ts.replace(tzinfo=timezone.utc).astimezone(zone).date()
+        else:
+            ld = ts.astimezone(zone).date()
+        by_day[ld] += 1
+    backlog = int(db.scalar(select(func.count()).select_from(RecognitionAttempt).where(RecognitionAttempt.resolved.is_(False))) or 0)
+    return {
+        "attempts": total,
+        "matched": matched,
+        "rejected": rejected,
+        "success_rate": (matched / total) if total else 0.0,
+        "rejected_by_day": [{"date": d.isoformat(), "count": by_day[d]} for d in sorted(by_day)],
+        "backlog": backlog,
+    }
+
+
+@router.get("/insights")
+def insights(
+    from_d: date = Query(..., alias="from"),
+    to_d: date = Query(..., alias="to"),
+    department: str | None = None,
+    admin: Admin = Depends(require_role(ROLE_ADMIN, ROLE_MANAGER)),
+    db: Session = Depends(get_session),
+):
+    start, end, tz_name, people, ids, data, rows, now_local = _context(db, admin, from_d, to_d, department)
+    tm_now = m_team_metrics(people, (start, end), rows, data, now=now_local)
+    per_now = [m_person_metrics(p, (start, end), rows, data, now=now_local) for p in people]
+    weekday_now = m_lateness_by_weekday(people, (start, end), rows, data)
+    late_hours = m_late_arrival_hours(people, (start, end), rows, data)
+    dept_groups = m_team_metrics(people, (start, end), rows, data, now=now_local, group_by="department")
+
+    # previous equal period (bounded)
+    pstart, pend = _prev_equal_period(start, end)
+    data_prev = _shifts_data_for(db, ids, pstart, pend)
+    rows_prev = _attendance_rows(db, ids, pstart, pend, tz_name)
+    tm_prev = m_team_metrics(people, (pstart, pend), rows_prev, data_prev, now=now_local)
+
+    reco = _recognition_health(db, start, end, tz_name)
+    items = m_compute_insights(
+        start=start, end=end, department=department,
+        team_now=tm_now, team_prev=tm_prev,
+        weekday_now=weekday_now, late_hours=late_hours,
+        people_now=per_now, dept_groups=dept_groups,
+        recognition=reco,
+    )
+    return {
+        "from": start.isoformat(), "to": end.isoformat(), "department": department,
+        "previous": {"from": pstart.isoformat(), "to": pend.isoformat()},
+        "items": items,
     }

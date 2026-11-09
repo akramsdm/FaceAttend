@@ -191,3 +191,51 @@ def test_constant_query_count_per_endpoint(client: TestClient, session_factory, 
             r = client.get(path, params=p, headers=hdr)
         assert r.status_code == 200
         assert qc.n == baseline[path], f"{path} query count grew with staff: {baseline[path]} -> {qc.n}"
+
+
+# ------------------------------- insights (2D) --------------------------
+
+from app.models import RecognitionAttempt
+
+
+def _add_attempt(session_factory, outcome, ts, resolved=False):
+    with session_factory() as s:
+        s.add(RecognitionAttempt(kiosk_id="k1", outcome=outcome, timestamp=ts, resolved=resolved))
+        s.commit()
+
+
+def test_insights_endpoint_shape_and_link_targets(client: TestClient, session_factory):
+    ids = _seed(session_factory)
+    for d in (5, 6, 7):
+        _add_att(session_factory, ids["a"], "in", datetime(2026, 1, d, 8, 20), flag="late", shift_date=date(2026, 1, d))
+    _add_attempt(session_factory, "matched", datetime(2026, 1, 6, 8, 0), resolved=True)
+    _add_attempt(session_factory, "rejected", datetime(2026, 1, 6, 8, 1), resolved=True)
+    _add_attempt(session_factory, "no_face", datetime(2026, 1, 6, 8, 2), resolved=False)
+    hdr = _hdrs(client, "alice", ADMIN_PW)
+    r = client.get("/api/admin/metrics/insights", params={"from": "2026-01-05", "to": "2026-01-09"}, headers=hdr)
+    assert r.status_code == 200, r.text
+    b = r.json()
+    assert b["from"] == "2026-01-05" and b["to"] == "2026-01-09"
+    assert "previous" in b and b["previous"]["from"] and b["previous"]["to"]
+    assert isinstance(b["items"], list) and len(b["items"]) <= 5
+    for it in b["items"]:
+        assert "text" in it and "numbers" in it and "link" in it and "id" in it
+    # recognition insight present (50% success, backlog 1)
+    reco = [x for x in b["items"] if x["id"] == "recognition_health"]
+    assert reco
+    assert reco[0]["numbers"]["backlog"] == 1
+    assert reco[0]["numbers"]["rejected_by_day"]
+    assert reco[0]["link"] == "review.html"
+    # staff followup (3 late)
+    fu = [x for x in b["items"] if x["id"] == "staff_followup"]
+    assert fu and any(s["staff_id"] == ids["a"] for s in fu[0]["numbers"]["staff"])
+
+
+def test_insights_department_scoping(client: TestClient, session_factory):
+    _seed(session_factory, with_second_dept=True)
+    hdr = _hdrs(client, "mgr", MGR_PW)
+    r = client.get("/api/admin/metrics/insights", params={"from": "2026-01-05", "to": "2026-01-09", "department": "Sales"}, headers=hdr)
+    assert r.status_code == 200
+    b = r.json()
+    assert b["department"] == "Sales"
+    assert isinstance(b["items"], list)

@@ -522,3 +522,188 @@ def top_n(people_metrics: Sequence[Mapping[str, Any]], metric: str, n: int = 5, 
     items = [dict(m) for m in people_metrics]
     items.sort(key=lambda m: (float(m.get(metric, 0) or 0), str(m.get("staff_id") or "")), reverse=reverse)
     return items[: max(0, int(n))]
+
+
+# ------------------------------- insights (2D) --------------------------
+
+WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def late_arrival_hours(
+    people: Sequence[Any],
+    date_range: tuple[date, date] | Sequence[date],
+    rows: Sequence[Any],
+    data: Mapping[str, Any] | None = None,
+    *,
+    resolve: Callable[[Any, date], ResolvedShift | None] | None = None,
+    exceptions: Sequence[Any] | None = None,
+) -> dict[int, int]:
+    """Count late arrivals by local hour-of-day of the (late) first clock-in."""
+    if isinstance(date_range, (tuple, list)) and len(date_range) == 2 and isinstance(date_range[0], date):
+        start, end = date_range[0], date_range[1]
+    else:
+        days = sorted(date_range)  # type: ignore[arg-type]
+        start, end = (days[0], days[-1]) if days else (date.today(), date.today())
+    counts: dict[int, int] = defaultdict(int)
+    for p in people:
+        pid = _pid(p)
+        for day in _iter_days(start, end):
+            sh = _resolve_for(pid, day, data, resolve)
+            if sh is None or _is_day_off_exception(pid, day, data, exceptions):
+                continue
+            fin = _first_in(_rows_for_person_day(rows, pid, day))
+            if fin is None:
+                continue
+            is_late, _ = _late_info(fin, sh)
+            if not is_late:
+                continue
+            ts = _naive(_as_dt(_get(fin, "timestamp")))
+            if ts is not None:
+                counts[int(ts.hour)] += 1
+    return dict(counts)
+
+
+def _prev_equal_period(start: date, end: date) -> tuple[date, date]:
+    days = (end - start).days + 1
+    pend = start - timedelta(days=1)
+    pstart = pend - timedelta(days=days - 1)
+    return pstart, pend
+
+
+def compute_insights(
+    *,
+    start: date,
+    end: date,
+    department: str | None,
+    team_now: Mapping[str, Any],
+    team_prev: Mapping[str, Any] | None,
+    weekday_now: Sequence[Mapping[str, Any]] | None,
+    late_hours: Mapping[int, int] | None,
+    people_now: Sequence[Mapping[str, Any]],
+    dept_groups: Sequence[Mapping[str, Any]] | None,
+    recognition: Mapping[str, Any] | None,
+    base_link: str = "attendance.html",
+) -> list[dict[str, Any]]:
+    """Plain-rule insights (no external services). Returns <=5, ordered by |effect| desc.
+
+    ``recognition`` may include: attempts, matched, rejected, success_rate,
+    rejected_by_day (list of {date,count}), backlog.
+    """
+    insights: list[dict[str, Any]] = []
+    q = f"from={start.isoformat()}&to={end.isoformat()}"
+    if department:
+        q += f"&department={department}"
+
+    # 1) Late arrivals vs previous equal period (percent change), only when >=10 events total.
+    cur_late = int((team_now or {}).get("late", 0) or 0)
+    prev_late = int((team_prev or {}).get("late", 0) or 0) if team_prev is not None else 0
+    if team_prev is not None and (cur_late + prev_late) >= 10 and prev_late > 0:
+        pct_change = round(((cur_late - prev_late) / prev_late) * 100.0, 1)
+        direction = "up" if pct_change > 0 else ("down" if pct_change < 0 else "flat")
+        insights.append({
+            "id": "late_vs_previous",
+            "text": f"Late arrivals {direction} {abs(pct_change)}% vs the previous equal period ({cur_late} now, {prev_late} before).",
+            "numbers": {"current_late": cur_late, "previous_late": prev_late, "percent_change": pct_change, "events_total": cur_late + prev_late},
+            "link": f"{base_link}?{q}&flag=late",
+            "effect": abs(pct_change),
+        })
+    elif team_prev is not None and (cur_late + prev_late) >= 10 and prev_late == 0 and cur_late > 0:
+        insights.append({
+            "id": "late_vs_previous",
+            "text": f"Late arrivals increased vs the previous equal period ({cur_late} now, 0 before).",
+            "numbers": {"current_late": cur_late, "previous_late": 0, "percent_change": None, "events_total": cur_late},
+            "link": f"{base_link}?{q}&flag=late",
+            "effect": float(cur_late) * 10.0,
+        })
+
+    # 2) Weekday and hour with the most late arrivals.
+    if cur_late > 0 and weekday_now:
+        worst_wd = max(weekday_now, key=lambda b: (int(b.get("late", 0) or 0), -int(b.get("weekday", 0) or 0)))
+        wd_late = int(worst_wd.get("late", 0) or 0)
+        if wd_late > 0:
+            wd_name = worst_wd.get("weekday_name") or WEEKDAY_NAMES[int(worst_wd.get("weekday", 0) or 0) % 7]
+            hour_part = ""
+            nums: dict[str, Any] = {"weekday": wd_name, "weekday_late": wd_late}
+            if late_hours:
+                peak_h = max(late_hours.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+                peak_h_n = int(late_hours.get(peak_h, 0) or 0)
+                if peak_h_n > 0:
+                    hour_part = f", most often around {int(peak_h):02d}:00"
+                    nums["peak_hour"] = int(peak_h)
+                    nums["peak_hour_late"] = peak_h_n
+            insights.append({
+                "id": "late_peak_time",
+                "text": f"Most late arrivals fall on {wd_name} ({wd_late}){hour_part}.",
+                "numbers": nums,
+                "link": f"{base_link}?{q}&flag=late",
+                "effect": float(wd_late),
+            })
+
+    # 3) Staff with >=3 late arrivals or >=2 missing clock-outs.
+    flagged = []
+    for p in people_now or []:
+        late_n = int(p.get("late", 0) or 0)
+        miss_n = int(p.get("missing_clock_outs", 0) or 0)
+        if late_n >= 3 or miss_n >= 2:
+            flagged.append({"staff_id": p.get("staff_id"), "name": p.get("name"), "department": p.get("department"), "late": late_n, "missing_clock_outs": miss_n})
+    if flagged:
+        flagged.sort(key=lambda x: (-x["late"], -x["missing_clock_outs"], x.get("name") or ""))
+        top = flagged[0]
+        parts = []
+        if top["late"] >= 3:
+            parts.append(f"{top['late']} late")
+        if top["missing_clock_outs"] >= 2:
+            parts.append(f"{top['missing_clock_outs']} missing clock-outs")
+        who = top.get("name") or f"Staff {top['staff_id']}"
+        text = f"{len(flagged)} staff need follow-up (e.g. {who}: {', '.join(parts)})."
+        link = f"{base_link}?{q}&staff_id={top['staff_id']}" if top.get("staff_id") else f"{base_link}?{q}"
+        insights.append({
+            "id": "staff_followup",
+            "text": text,
+            "numbers": {"count": len(flagged), "staff": flagged[:10]},
+            "link": link,
+            "effect": float(max(top["late"] * 2, top["missing_clock_outs"] * 3, len(flagged))),
+        })
+
+    # 4) Department attendance rate >10 points below overall rate.
+    overall_rate = float((team_now or {}).get("attendance_rate", 0.0) or 0.0)
+    if dept_groups and (team_now or {}).get("scheduled_ended", 0):
+        low = []
+        for g in dept_groups:
+            rate = float(g.get("attendance_rate", 0.0) or 0.0)
+            gap_pts = (overall_rate - rate) * 100.0
+            if gap_pts > 10.0 and int(g.get("scheduled_ended", 0) or 0) > 0:
+                low.append({"department": g.get("group"), "attendance_rate": rate, "overall_rate": overall_rate, "gap_points": round(gap_pts, 1)})
+        if low:
+            low.sort(key=lambda x: -x["gap_points"])
+            w = low[0]
+            insights.append({
+                "id": "low_department_rate",
+                "text": f"{w['department'] or '(none)'} attendance is {w['gap_points']} points below overall ({round(w['attendance_rate']*100,1)}% vs {round(overall_rate*100,1)}%).",
+                "numbers": {"departments": low, "overall_rate": overall_rate},
+                "link": f"{base_link}?{q}&department={w['department'] or ''}",
+                "effect": float(w["gap_points"]),
+            })
+
+    # 5) Recognition health.
+    if recognition is not None and int(recognition.get("attempts", 0) or 0) > 0:
+        attempts = int(recognition.get("attempts", 0) or 0)
+        matched = int(recognition.get("matched", 0) or 0)
+        rejected = int(recognition.get("rejected", 0) or 0)
+        success_rate = float(recognition.get("success_rate", 0.0) or 0.0)
+        backlog = int(recognition.get("backlog", 0) or 0)
+        # highlight when success < 80% or backlog > 0 or rejected notable
+        if success_rate < 0.8 or backlog > 0 or rejected >= 5:
+            insights.append({
+                "id": "recognition_health",
+                "text": f"Recognition: {round(success_rate*100,1)}% success ({matched}/{attempts}); {rejected} rejected; review backlog {backlog}.",
+                "numbers": {
+                    "attempts": attempts, "matched": matched, "rejected": rejected,
+                    "success_rate": success_rate, "rejected_by_day": recognition.get("rejected_by_day", []), "backlog": backlog,
+                },
+                "link": "review.html",
+                "effect": float((1.0 - success_rate) * 50.0 + min(backlog, 20) + min(rejected, 20)),
+            })
+
+    insights.sort(key=lambda x: (-float(x.get("effect", 0) or 0), x.get("id") or ""))
+    return insights[:5]
