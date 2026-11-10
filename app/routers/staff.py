@@ -4,7 +4,7 @@ from datetime import datetime
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ from app.models import Admin, Consent, FaceEmbedding, Staff, delete_staff_data
 from app.recognition import MODEL_NAME, MODEL_VERSION, GalleryCache, Recognizer
 from app.security import require_admin, require_admin_csrf
 from app.settings_store import get_value
+from app.signin import iso_utc
 
 router = APIRouter(prefix="/api/admin/staff", tags=["staff"])
 
@@ -59,6 +60,10 @@ class StaffRead(BaseModel):
     created_at: datetime
     enrolled: bool
     embedding_count: int
+
+    @field_serializer("created_at")
+    def _serialize_created_at(self, value: datetime) -> str | None:
+        return iso_utc(value)
 
 
 class ImageResult(BaseModel):
