@@ -132,14 +132,15 @@ def _day_sig(days: list[PatternDay] | list[dict[str, Any]]) -> list[tuple]:
             wd = d.weekday
             st = d.start_time.strftime("%H:%M:%S") if d.start_time else None
             en = d.end_time.strftime("%H:%M:%S") if d.end_time else None
-            ov = bool(d.overnight)
             enb = bool(d.enabled)
         else:
             wd = int(d["weekday"])
             st = _norm_t(d.get("start_time"))
             en = _norm_t(d.get("end_time"))
-            ov = bool(d.get("overnight", False))
             enb = bool(d.get("enabled", True))
+        # Derive overnight from the times so a stale flag never makes an
+        # identical week look different.
+        ov = bool(st and en and en <= st)
         norm.append((wd, st, en, ov, enb))
     return sorted(norm)
 
@@ -429,7 +430,7 @@ def save_personal_week(
                 weekday=int(d["weekday"]),
                 start_time=_to_time(d["start_time"]),
                 end_time=_to_time(d["end_time"]),
-                overnight=bool(d.get("overnight", False)),
+                overnight=_to_time(d["end_time"]) <= _to_time(d["start_time"]),
                 enabled=bool(d.get("enabled", True)),
             )
         )

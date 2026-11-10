@@ -162,6 +162,51 @@ def test_night_shift_crossing_midnight():
     assert res["flag"] == "overtime"
 
 
+def test_same_day_pattern_ignores_stale_overnight_flag():
+    """A stale flag must not turn 10:00-18:00 into a 32-hour shift."""
+    stale = {
+        "id": "p_stale",
+        "name": "Stale",
+        "owner_staff_id": None,
+        "early_window_min": 30,
+        "grace_min": 10,
+        "break_min": 0,
+        "days": [
+            {"weekday": 0, "start_time": time(10, 0), "end_time": time(18, 0),
+             "overnight": True, "enabled": True}
+        ],
+    }
+    data = {
+        "patterns": [stale],
+        "assignments": [
+            {"staff_id": 1, "pattern_id": "p_stale", "effective_from": date(2026, 1, 1), "effective_to": None}
+        ],
+        "exceptions": [],
+    }
+    shift = resolve_shift(1, MON, data)
+    assert shift is not None
+    assert shift.overnight is False
+    assert shift.start == dt(2026, 1, 5, 10, 0)
+    assert shift.end == dt(2026, 1, 5, 18, 0)
+
+
+def test_same_day_exception_ignores_stale_overnight_flag():
+    data = {
+        "patterns": [OFFICE_PATTERN],
+        "assignments": [
+            {"staff_id": 1, "pattern_id": "p_office", "effective_from": date(2026, 1, 1), "effective_to": None}
+        ],
+        "exceptions": [
+            {"staff_id": 1, "date": MON, "kind": "custom_hours",
+             "start_time": time(10, 0), "end_time": time(18, 0), "overnight": True}
+        ],
+    }
+    shift = resolve_shift(1, MON, data)
+    assert shift is not None
+    assert shift.overnight is False
+    assert shift.end == dt(2026, 1, 5, 18, 0)
+
+
 def test_shift_date_for_night_shift():
     data = {"patterns": [NIGHT_PATTERN], "assignments": [
         {"staff_id": 1, "pattern_id": "p_night", "effective_from": date(2026, 1, 1), "effective_to": None}

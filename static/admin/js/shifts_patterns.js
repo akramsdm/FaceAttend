@@ -9,12 +9,14 @@
     var tb=$("grid-body"); tb.innerHTML="";
     for(var wd=0; wd<7; wd++){
       var v = (values||[]).find(function(d){return d.weekday===wd;}) || {weekday:wd,enabled:wd<5,start_time:"08:00",end_time:"17:00",overnight:false};
+      // Derive "ends next day" from the times; ignore stale stored flags.
+      var overnight = !!(v.enabled && v.start_time && v.end_time && String(v.end_time) <= String(v.start_time));
       var tr=document.createElement("tr");
       tr.innerHTML = '<th scope="row">'+DAYS[wd]+'</th>'+
         '<td><input type="checkbox" data-f="enabled" data-wd="'+wd+'" '+(v.enabled?'checked':'')+' aria-label="'+DAYS[wd]+' enabled"></td>'+
         '<td><input type="text" data-f="start_time" data-wd="'+wd+'" value="'+(v.start_time||'08:00')+'" size="6" placeholder="08:00"></td>'+
         '<td><input type="text" data-f="end_time" data-wd="'+wd+'" value="'+(v.end_time||'17:00')+'" size="6" placeholder="17:00"></td>'+
-        '<td><input type="checkbox" data-f="overnight" data-wd="'+wd+'" '+(v.overnight?'checked':'')+' aria-label="'+DAYS[wd]+' overnight"></td>';
+        '<td><input type="checkbox" data-f="overnight" data-wd="'+wd+'" '+(overnight?'checked':'')+' aria-label="'+DAYS[wd]+' overnight"></td>';
       tb.appendChild(tr);
     }
   }
@@ -22,8 +24,9 @@
     var days=[];
     for(var wd=0; wd<7; wd++){
       function q(f){ return document.querySelector('[data-wd="'+wd+'"][data-f="'+f+'"]'); }
-      days.push({weekday:wd, enabled:q("enabled").checked, start_time:q("start_time").value.trim(),
-        end_time:q("end_time").value.trim(), overnight:q("overnight").checked});
+      var st=q("start_time").value.trim(), et=q("end_time").value.trim();
+      days.push({weekday:wd, enabled:q("enabled").checked, start_time:st,
+        end_time:et, overnight:q("enabled").checked && !!st && !!et && et <= st});
     }
     return days;
   }

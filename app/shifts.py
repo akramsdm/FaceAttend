@@ -59,6 +59,7 @@ class ResolvedShift:
     break_min: int
     source: str = "pattern"  # exception | personal | shared
     shift_date: date | None = None
+    pattern_id: int | None = None
 
 
 def _find_personal_pattern(
@@ -123,6 +124,7 @@ def _build_resolved(
     grace: int,
     break_min: int,
     source: str,
+    pattern_id: int | None = None,
 ) -> ResolvedShift:
     start_dt = datetime.combine(on_date, start_t)
     end_day = on_date + timedelta(days=1) if overnight else on_date
@@ -136,6 +138,7 @@ def _build_resolved(
         break_min=int(break_min),
         source=source,
         shift_date=on_date,
+        pattern_id=pattern_id,
     )
 
 
@@ -149,14 +152,14 @@ def _resolved_from_pattern(
         return None
     start_t = _time(_get(day, "start_time"))
     end_t = _time(_get(day, "end_time"))
-    overnight = bool(_get(day, "overnight", False))
-    # A cross-midnight span implies overnight even if not flagged.
-    if not overnight and end_t <= start_t:
-        overnight = True
+    # A cross-midnight span implies overnight even if not flagged. Conversely,
+    # a span whose end is after its start cannot cross midnight: ignore a stale
+    # overnight flag left over from an earlier night-shift configuration.
+    overnight = end_t <= start_t
     early_window = _minutes(_get(pattern, "early_window_min", _get(pattern, "early_window", 30)), 30)
     grace = _minutes(_get(pattern, "grace_min", _get(pattern, "grace", 10)), 10)
     break_min = _minutes(_get(pattern, "break_min", _get(pattern, "break", 0)), 0)
-    return _build_resolved(on_date, start_t, end_t, overnight, early_window, grace, break_min, source)
+    return _build_resolved(on_date, start_t, end_t, overnight, early_window, grace, break_min, source, pattern_id=_get(pattern, "id"))
 
 
 def _is_day_off_exception(ex: Any) -> bool:
@@ -180,9 +183,9 @@ def _resolved_from_exception(
     # when available, else sensible defaults.
     start_t = _time(_get(ex, "start_time"))
     end_t = _time(_get(ex, "end_time"))
-    overnight = bool(_get(ex, "overnight", False))
-    if not overnight and end_t <= start_t:
-        overnight = True
+    # Derive overnight from the times: an end at or before the start is the
+    # only shape that can cross midnight.
+    overnight = end_t <= start_t
     # inherit early/grace/break from personal, then assigned pattern.
     inherit = _find_personal_pattern(staff_id, data)
     if inherit is None:
@@ -192,7 +195,8 @@ def _resolved_from_exception(
     early_window = _minutes(_get(inherit, "early_window_min", _get(inherit, "early_window", 30)), 30) if inherit else 30
     grace = _minutes(_get(inherit, "grace_min", _get(inherit, "grace", 10)), 10) if inherit else 10
     break_min = _minutes(_get(inherit, "break_min", _get(inherit, "break", 0)), 0) if inherit else 0
-    return _build_resolved(on_date, start_t, end_t, overnight, early_window, grace, break_min, "exception")
+    base_pid = _get(inherit, "id") if inherit is not None else None
+    return _build_resolved(on_date, start_t, end_t, overnight, early_window, grace, break_min, "exception", pattern_id=base_pid)
 
 
 def resolve_shift(staff_id: Any, on_date: date, data: Mapping[str, Any]) -> ResolvedShift | None:
@@ -229,6 +233,23 @@ def resolve_shift(staff_id: Any, on_date: date, data: Mapping[str, Any]) -> Reso
         if pattern is not None:
             return _resolved_from_pattern(pattern, on_date, "shared")
     return None
+
+
+def resolve_pattern(
+    pattern_id: Any, on_date: date, data: Mapping[str, Any], source: str = "pattern"
+) -> ResolvedShift | None:
+    """Rebuild a resolved shift from a stored ``shift_id`` (pattern id).
+
+    This is used to reconstruct the shift that belongs to an already-open
+    attendance session. It deliberately resolves the pattern directly instead
+    of re-running assignment/exception resolution for the current day, so a
+    later reassignment cannot change an open session's shift.
+    """
+
+    pattern = _find_pattern_by_id(pattern_id, data)
+    if pattern is None:
+        return None
+    return _resolved_from_pattern(pattern, on_date, source)
 
 
 def _shift_bounds(shift: Any) -> tuple[datetime, datetime, bool, int, int, int]:
@@ -296,6 +317,7 @@ def evaluate(
     shift: Any | None,
     open_session: bool,
     margin_overtime: int | float | None = 0,
+    completed_session_for_shift: bool = False,
 ) -> dict[str, Any]:
     """Evaluate clock-in/out allowance for the current situation.
 
@@ -306,6 +328,10 @@ def evaluate(
     ``margin_overtime`` is minutes beyond shift end before ``overtime`` is flagged
     (clock-out after end but within the margin is allowed with flag ``none``).
     ``None`` is treated as 0.
+
+    ``completed_session_for_shift``: True when a non-undone in has a later
+    non-undone out for the same person and shift_date (shift already completed)
+    and there is no open session.
     """
     ot_margin = int(0 if margin_overtime is None else margin_overtime)
 
@@ -315,6 +341,15 @@ def evaluate(
             "message": "no_shift_request_approval",
             "flag": "none",
             "confirm_required": False,
+        }
+
+    if completed_session_for_shift and not open_session:
+        return {
+            "allowed_actions": [],
+            "message": "shift_already_completed",
+            "flag": "none",
+            "confirm_required": False,
+            "reason_code": "reentry",
         }
 
     start, end, overnight, early_window, grace, _break = _shift_bounds(shift)
@@ -365,6 +400,17 @@ def evaluate(
             "confirm_required": False,
             "window_opens_at": window_open,
             "shift_starts_at": start,
+        }
+    # Clock-in after the shift has already ended is not a normal on-time
+    # session. Late arrival *within* the shift is still allowed and flagged
+    # (product rule), but after shift end an explicit approval is required.
+    if now > end:
+        return {
+            "allowed_actions": [],
+            "message": "after_shift_end",
+            "flag": "none",
+            "confirm_required": False,
+            "reason_code": "out_of_window",
         }
     if now <= start:
         return {

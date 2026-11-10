@@ -137,6 +137,43 @@ def test_people_night_shift_in_week_strip(client: TestClient, session_factory):
     assert row["schedule_label"] == "Night"
 
 
+def test_people_survives_day_change_exception(client: TestClient, session_factory):
+    """A day change in the week must not crash the People view.
+
+    Regression: ``_shifts_data_for`` returned ORM ShiftException objects while
+    ``_people_rows`` indexed them as dicts, raising
+    ``TypeError: 'ShiftException' object is not subscriptable`` and leaving the
+    reassignment UI stuck on "Loading…" after any day change was saved.
+    """
+    with session_factory() as s:
+        s.add(Admin(username="alice", password_hash=hash_password(ADMIN_PW), role="admin"))
+        s.commit()
+    sid = mk_staff(session_factory, "X1", "Exception Person", "Eng")
+    pid = mk_pattern(session_factory, "OfficeX", [(wd, "08:00", "17:00", False) for wd in range(5)])
+    assign(session_factory, sid, pid, date(2026, 1, 1))
+    hdr = hdrs(client, "alice", ADMIN_PW)
+
+    r = client.post(
+        "/api/admin/shifts/exceptions",
+        json={"staff_id": sid, "date": "2026-01-05", "kind": "day_off", "reason": "leave"},
+        headers=hdr,
+    )
+    assert r.status_code == 201, r.text
+
+    r = client.get(
+        "/api/admin/shifts/people",
+        params={"week_start": WEEK_START.isoformat()},
+        headers=hdr,
+    )
+    assert r.status_code == 200, r.text
+    row = next(i for i in r.json()["items"] if i["id"] == sid)
+    assert row["source"] == "changed"
+    mon = next(d for d in row["days"] if d["date"] == "2026-01-05")
+    assert mon["shift"] is None
+    tue = next(d for d in row["days"] if d["date"] == "2026-01-06")
+    assert tue["shift"] is not None
+
+
 def test_people_constant_query_count_not_per_person(client: TestClient, session_factory):
     with session_factory() as s:
         s.add(Admin(username="alice", password_hash=hash_password(ADMIN_PW), role="admin"))

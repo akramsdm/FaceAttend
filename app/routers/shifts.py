@@ -41,8 +41,9 @@ def seed_default_patterns(db: Session) -> None:
         pat = Pattern(name=name, owner_staff_id=None, early_window_min=early, grace_min=grace, break_min=brk, is_default=True)
         db.add(pat)
         db.flush()
-        for wd, st, en, ov in days:
-            db.add(PatternDay(pattern_id=pat.id, weekday=wd, start_time=_t(st), end_time=_t(en), overnight=ov, enabled=True))
+        for wd, st, en, _ov in days:
+            db.add(PatternDay(pattern_id=pat.id, weekday=wd, start_time=_t(st), end_time=_t(en),
+                              overnight=_t(en) <= _t(st), enabled=True))
     db.flush()
 
 
@@ -128,7 +129,7 @@ def _pattern_to_dict(p: Pattern, used_by: int | None = None) -> dict:
         "archived_at": p.archived_at.isoformat() if getattr(p, "archived_at", None) else None,
         "used_by": int(used_by or 0),
         "days": [{"weekday": d.weekday, "start_time": d.start_time.strftime("%H:%M"),
-                  "end_time": d.end_time.strftime("%H:%M"), "overnight": d.overnight,
+                  "end_time": d.end_time.strftime("%H:%M"), "overnight": d.end_time <= d.start_time,
                   "enabled": d.enabled} for d in sorted(p.days, key=lambda x: x.weekday)],
     }
 
@@ -281,7 +282,7 @@ def create_pattern(
     db.add(pat); db.flush()
     for d in payload.days:
         db.add(PatternDay(pattern_id=pat.id, weekday=d.weekday, start_time=_t(d.start_time),
-                          end_time=_t(d.end_time), overnight=d.overnight, enabled=d.enabled))
+                          end_time=_t(d.end_time), overnight=_t(d.end_time) <= _t(d.start_time), enabled=d.enabled))
     record_audit(db, admin.id, "create_pattern", f"pattern:{pat.id}", payload.name)
     db.commit(); db.refresh(pat)
     return _pattern_to_dict(pat)
@@ -335,7 +336,7 @@ def update_pattern(
     db.flush()
     for d in payload.days:
         db.add(PatternDay(pattern_id=pat.id, weekday=d.weekday, start_time=_t(d.start_time),
-                          end_time=_t(d.end_time), overnight=d.overnight, enabled=d.enabled))
+                          end_time=_t(d.end_time), overnight=_t(d.end_time) <= _t(d.start_time), enabled=d.enabled))
     record_audit(db, admin.id, "update_pattern", f"pattern:{pat.id}", payload.name)
     db.commit(); db.refresh(pat)
     return _pattern_to_dict(pat)
@@ -400,7 +401,7 @@ def customise_pattern_for_staff(
             "weekday": d.weekday,
             "start_time": d.start_time.strftime("%H:%M"),
             "end_time": d.end_time.strftime("%H:%M"),
-            "overnight": d.overnight,
+            "overnight": d.end_time <= d.start_time,
             "enabled": d.enabled,
         }
         for d in sorted(src.days, key=lambda x: x.weekday)
@@ -652,7 +653,7 @@ def _pattern_data(p: Pattern) -> dict:
                 "weekday": d.weekday,
                 "start_time": d.start_time,
                 "end_time": d.end_time,
-                "overnight": d.overnight,
+                "overnight": d.end_time <= d.start_time,
                 "enabled": d.enabled,
             }
             for d in p.days
@@ -701,7 +702,9 @@ def _shifts_data_for(db: Session, staff_ids: list[int], start: date_t, end: date
         }
         for e in exs
     ]
-    return {"patterns": patterns, "assignments": assignments, "exceptions": exs}
+    # Return plain dicts, consistent with patterns/assignments. Callers such as
+    # _people_rows index exceptions by key, and resolve_shift handles mappings.
+    return {"patterns": patterns, "assignments": assignments, "exceptions": exceptions}
 
 
 def _people_rows(

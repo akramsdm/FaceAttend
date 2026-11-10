@@ -22,8 +22,8 @@
     var en = d && d.enabled ? "checked" : (d ? "" : (wd < 5 ? "checked" : ""));
     var st = hm(d && d.start_time, "08:00");
     var et = hm(d && d.end_time, "17:00");
-    var ov = !!(d && d.overnight);
-    if (!ov && (d && d.enabled)) ov = autoOvernight(st, et);
+    // The times decide whether a shift ends next day; ignore a stale flag.
+    var ov = !!(d && d.enabled) && autoOvernight(st, et);
     var idEn = prefix + "-en-" + wd, idSt = prefix + "-st-" + wd, idEt = prefix + "-et-" + wd, idOv = prefix + "-ov-" + wd;
     return '<div class="day-cell" data-daycell="' + wd + '">' +
       '<h4>' + DAYS[wd] + '</h4>' +
@@ -57,7 +57,7 @@
     function syncOv(wd) {
       var st = q(wd, "start_time").value, et = q(wd, "end_time").value, en = q(wd, "enabled").checked;
       var ov = q(wd, "overnight");
-      if (en && autoOvernight(st, et)) ov.checked = true;
+      ov.checked = en && autoOvernight(st, et);
       var note = container.querySelector('[data-ov-note="' + wd + '"]');
       if (note) note.hidden = !ov.checked;
     }
@@ -99,8 +99,7 @@
       var en = d ? !!d.enabled : (wd < 5);
       var st = hm(d && d.start_time, "08:00");
       var et = hm(d && d.end_time, "17:00");
-      var ov = d ? !!d.overnight : false;
-      if (!ov && en) ov = autoOvernight(st, et);
+      var ov = en && autoOvernight(st, et);
       var qe = container.querySelector('[data-wd="' + wd + '"][data-f="enabled"]');
       var qs = container.querySelector('[data-wd="' + wd + '"][data-f="start_time"]');
       var qt = container.querySelector('[data-wd="' + wd + '"][data-f="end_time"]');
@@ -120,8 +119,7 @@
       function q(f) { return container.querySelector('[data-wd="' + wd + '"][data-f="' + f + '"]'); }
       var st = (q("start_time").value || "08:00").slice(0, 5);
       var et = (q("end_time").value || "17:00").slice(0, 5);
-      var ov = q("overnight").checked;
-      if (!ov && q("enabled").checked && autoOvernight(st, et)) ov = true;
+      var ov = q("enabled").checked && autoOvernight(st, et);
       days.push({ weekday: wd, enabled: q("enabled").checked, start_time: st, end_time: et, overnight: ov });
     }
     var pfx = container._wePrefix;
