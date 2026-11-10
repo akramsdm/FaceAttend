@@ -45,6 +45,13 @@ def assign_office(session_factory: sessionmaker[Session], staff_id: int):
         s.commit()
 
 
+def office_id(session_factory: sessionmaker[Session]) -> int:
+    with session_factory() as s:
+        office = s.scalar(select(Pattern).where(Pattern.name == "Office hours", Pattern.is_default.is_(True)))
+        assert office is not None
+        return office.id
+
+
 def make_token(session_factory: sessionmaker[Session], staff_id: int, kiosk="kiosk-1",
                issued_at=datetime(2026, 1, 5, 9, 0, 0), ttl=20) -> str:
     with session_factory() as s:
@@ -97,8 +104,10 @@ def test_clock_out_allowed_after_end(clock_env, session_factory):
     # 17:30 after 17:00 end, margin 0 => overtime flag; clocked in
     client = clock_env
     sid = add_staff(session_factory); assign_office(session_factory, sid)
+    pid = office_id(session_factory)
     with session_factory() as s:
-        s.add(Attendance(staff_id=sid, type="in", timestamp=datetime(2026, 1, 5, 8, 0, 0), method="manual"))
+        s.add(Attendance(staff_id=sid, type="in", timestamp=datetime(2026, 1, 5, 8, 0, 0), method="manual",
+                         shift_id=pid, shift_date=datetime(2026, 1, 5).date()))
         s.commit()
     app.dependency_overrides[clock_router.get_now] = lambda: datetime(2026, 1, 5, 17, 30, 0)
     token = make_token(session_factory, sid, issued_at=datetime(2026, 1, 5, 17, 30, 0))
@@ -149,8 +158,10 @@ def test_blocked_no_shift(clock_env, session_factory):
 def test_early_out_requires_confirm_then_succeeds(clock_env, session_factory):
     client = clock_env
     sid = add_staff(session_factory); assign_office(session_factory, sid)
+    pid = office_id(session_factory)
     with session_factory() as s:
-        s.add(Attendance(staff_id=sid, type="in", timestamp=datetime(2026, 1, 5, 8, 0, 0), method="manual"))
+        s.add(Attendance(staff_id=sid, type="in", timestamp=datetime(2026, 1, 5, 8, 0, 0), method="manual",
+                         shift_id=pid, shift_date=datetime(2026, 1, 5).date()))
         s.commit()
     app.dependency_overrides[clock_router.get_now] = lambda: datetime(2026, 1, 5, 12, 0, 0)
     token = make_token(session_factory, sid, issued_at=datetime(2026, 1, 5, 12, 0, 0))
