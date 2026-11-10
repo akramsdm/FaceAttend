@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from app.models import Admin, ApprovalRequest, Attendance, Staff, utcnow
 from app.routers.shifts import _shifts_data
 from app.security import ROLE_ADMIN, ROLE_MANAGER, can_access_staff, require_role
 from app.shifts import resolve_shift
+from app.signin import iso_utc
 
 router = APIRouter(prefix="/api/admin/approvals", tags=["approvals"])
 
@@ -31,6 +32,10 @@ class ApprovalOut(BaseModel):
     decided_at: datetime | None
     decision_note: str | None
     today_shift: str | None
+
+    @field_serializer("requested_at", "decided_at")
+    def _serialize_times(self, value: datetime | None) -> str | None:
+        return iso_utc(value)
 
 
 class DecisionIn(BaseModel):
