@@ -23,6 +23,9 @@ DEFINITIONS: dict[str, dict[str, Any]] = {
     "missing_close_hours": {"type": int, "min": 1, "max": 48, "default": lambda s: 4},
     "followup_late_count": {"type": int, "min": 1, "max": 365, "default": lambda s: 3},
     "followup_period_days": {"type": int, "min": 1, "max": 366, "default": lambda s: 30},
+    "early_arrival_minutes": {"type": int, "min": 0, "max": 240, "default": lambda s: 15},
+    "late_clockout_minutes": {"type": int, "min": 0, "max": 240, "default": lambda s: 15},
+    "allow_reentry_same_shift": {"type": bool, "default": lambda s: False},
 }
 
 

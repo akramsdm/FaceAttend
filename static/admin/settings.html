@@ -73,7 +73,17 @@
             <p class="help">When on, kiosk asks for a random left/right head turn (two frames) before recording a match. Helps stop a still photo but is not certified anti-spoofing and may not stop a video.</p>
           </div>
           <p id="error" class="message error" role="alert"></p>
-          <div class="button-row">          <h3>Follow-up rule (prompt for a conversation, not an automatic penalty)</h3>
+          <div class="button-row">                    <div class="field">
+            <label for="early_arrival_minutes">Early arrival threshold (minutes before shift start, 0–240, default 15)</label>
+            <input id="early_arrival_minutes" name="early_arrival_minutes" type="number" min="0" max="240" step="1" />
+            <p class="help">Clock-in this many minutes (or more) before shift start is counted as “early arrival” in session status (read-time; does not change stored flags).</p>
+          </div>
+          <div class="field">
+            <label for="late_clockout_minutes">Late clock-out threshold (minutes after shift end, 0–240, default 15)</label>
+            <input id="late_clockout_minutes" name="late_clockout_minutes" type="number" min="0" max="240" step="1" />
+            <p class="help">Clock-out this many minutes (or more) after shift end is counted as “late clock-out” in session status (read-time; does not change stored flags).</p>
+          </div>
+          <h3>Follow-up rule (prompt for a conversation, not an automatic penalty)</h3>
           <p class="help">Flags staff with N or more late arrivals in a period on the dashboard and person/report views. Changes are recorded in the audit log.</p>
           <div class="field">
             <label for="followup_late_count">Late arrivals threshold (N, default 3)</label>

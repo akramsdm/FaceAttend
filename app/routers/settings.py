@@ -27,6 +27,9 @@ class SettingsUpdate(BaseModel):
     missing_close_hours: int | None = None
     followup_late_count: int | None = None
     followup_period_days: int | None = None
+    early_arrival_minutes: int | None = None
+    late_clockout_minutes: int | None = None
+    allow_reentry_same_shift: bool | None = None
 
 
 @router.get("/settings")
