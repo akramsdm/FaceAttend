@@ -7,16 +7,16 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.attendance_service import close_open_session, record_event, state_for_staff
 from app.audit import record_audit
-from app.config import get_settings
 from app.db import get_session
-from app.models import Admin, Attendance, RecognitionAttempt, Staff
+from app.models import Admin, RecognitionAttempt, Staff
 from app.security import require_admin, require_admin_csrf
-from app.signin import ROOT, next_action
+from app.signin import ROOT, iso_utc
 
 router = APIRouter(prefix="/api/admin/review", tags=["review"])
 
@@ -31,6 +31,10 @@ class ReviewItem(BaseModel):
     score: float | None
     frame_path: str | None
     resolved: bool
+
+    @field_serializer("timestamp")
+    def _serialize_timestamp(self, value: datetime) -> str | None:
+        return iso_utc(value)
 
 
 class ResolvePayload(BaseModel):
@@ -122,21 +126,57 @@ def resolve_attempt(
         staff = db.get(Staff, payload.staff_id)
         if staff is None or staff.anonymised:
             raise HTTPException(status_code=404, detail="Staff not found")
-        tz = get_settings().timezone
-        action = next_action(db, staff.id, attempt.timestamp, tz)
-        row = Attendance(
-            staff_id=staff.id,
-            type=action,
-            timestamp=attempt.timestamp,
-            method="review",
-            edited_by=admin.id,
-            edit_reason=payload.reason.strip(),
-        )
-        db.add(row)
-        db.flush()
+        # The backend decides in/out from the authoritative lifecycle state at
+        # the attempt time, so a review assignment can never create an orphan
+        # clock-out or a duplicate open session.
+        state = state_for_staff(db, staff, attempt.timestamp)
+        reason = payload.reason.strip()
+        if state["open_in"] is not None:
+            open_in = state["open_in"]
+            # A clock-out can never precede the clock-in it closes.
+            if attempt.timestamp < open_in.timestamp:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "status": "blocked",
+                        "message": "attempt_before_open_session",
+                        "reason_code": "out_of_window",
+                    },
+                )
+            row = close_open_session(
+                db,
+                open_in,
+                now_utc=attempt.timestamp,
+                method="review",
+                edited_by=admin.id,
+                edit_reason=reason,
+            )
+        elif state["completed"]:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "status": "blocked",
+                    "message": "shift_already_completed",
+                    "reason_code": "reentry",
+                },
+            )
+        else:
+            shift = state["shift"]
+            row = record_event(
+                db,
+                staff_id=staff.id,
+                action="in",
+                now_utc=attempt.timestamp,
+                shift_id=getattr(shift, "pattern_id", None),
+                shift_date=state["shift_date"],
+                flag=(state["evaluation"] or {}).get("flag"),
+                method="review",
+                edited_by=admin.id,
+                edit_reason=reason,
+            )
         result["attendance_id"] = row.id
-        result["attendance_type"] = action
-        record_audit(db, admin.id, "resolve_review_assign", f"attempt:{attempt.id}", payload.reason.strip())
+        result["attendance_type"] = row.type
+        record_audit(db, admin.id, "resolve_review_assign", f"attempt:{attempt.id}", reason)
     else:
         record_audit(db, admin.id, "resolve_review_dismiss", f"attempt:{attempt.id}", payload.reason.strip())
 
