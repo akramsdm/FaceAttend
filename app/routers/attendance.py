@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import csv
 import io
+from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field, field_serializer
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -15,11 +16,11 @@ from app.audit import record_audit
 from app.config import get_settings
 from app.db import get_session
 from app.models import Admin, Attendance, Pattern, RecognitionAttempt, Staff
-from app.routers.shifts import _shifts_data
-from app.security import require_admin, require_admin_csrf
+from app.routers.shifts import _shifts_data, _shifts_data_for
+from app.security import ROLE_ADMIN, ROLE_MANAGER, require_admin, require_admin_csrf, require_role
 from app.settings_store import get_all
 from app.shifts import resolve_shift
-from app.signin import local_day_bounds, to_local_time
+from app.signin import iso_utc, local_day_bounds, to_local_time
 
 router = APIRouter(prefix="/api/admin/attendance", tags=["attendance"])
 
@@ -38,6 +39,11 @@ class AttendanceRead(BaseModel):
     flag: str | None = None
     edited_by: int | None
     edit_reason: str | None
+
+    @field_serializer("timestamp")
+    def _serialize_timestamp(self, value: datetime) -> str | None:
+        # Stored values are naive UTC; always expose an explicit UTC offset.
+        return iso_utc(value)
 
 
 class ManualAttendance(BaseModel):
@@ -421,3 +427,422 @@ def monthly_report(
             missing_clock_outs, f"{total_seconds / 3600:.2f}", ";".join(unpaired_days),
         ])
     return Response(content=buf.getvalue(), media_type="text/csv")
+
+
+# ============================ sessions (read-time) ============================
+
+ARRIVAL_OPTS = {"early", "on_time", "late"}
+DEPARTURE_OPTS = {"early_departure", "on_time", "late_clock_out"}
+SESSION_OPTS = {"in_progress", "missing_clock_out", "orphan_out"}
+RECORD_OPTS = {"manual", "edited", "approved_request"}
+
+
+def _role(admin: Admin) -> str:
+    return getattr(admin, "role", None) or ROLE_ADMIN
+
+
+def _repeat(qp, key: str) -> list[str]:
+    # accept ?arrival=early&arrival=late and ?arrival=early,late
+    vals = qp.getlist(key) if hasattr(qp, "getlist") else []
+    out: list[str] = []
+    for v in vals:
+        for part in str(v).split(","):
+            part = part.strip()
+            if part:
+                out.append(part)
+    return out
+
+
+def _pattern_name_map(db: Session) -> dict[int, str]:
+    rows = db.execute(select(Pattern.id, Pattern.name)).all()
+    return {int(i): n for i, n in rows}
+
+
+def _to_local_naive(ts: datetime | None, zone: ZoneInfo) -> datetime | None:
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        return ts.replace(tzinfo=timezone.utc).astimezone(zone).replace(tzinfo=None)
+    return ts.astimezone(zone).replace(tzinfo=None)
+
+
+def _iso_local(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=None).isoformat(timespec="seconds")
+
+
+def _disp(dt: datetime | None) -> str | None:
+    if dt is None:
+        return None
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def _scoped_staff_sessions(db: Session, admin: Admin, department: str | None, staff_id: int | None, search: str | None) -> list[Staff]:
+    q = select(Staff).where(Staff.anonymised.is_(False))
+    if _role(admin) == ROLE_MANAGER:
+        scope = getattr(admin, "department_scope", None)
+        q = q.where(Staff.department == scope)
+        if department and scope is not None and department != scope:
+            return []
+    if department:
+        q = q.where(Staff.department == department)
+    if staff_id is not None:
+        q = q.where(Staff.id == staff_id)
+    if search:
+        like = f"%{search.strip()}%"
+        q = q.where((Staff.name.ilike(like)) | (Staff.staff_code.ilike(like)))
+    return list(db.scalars(q.order_by(Staff.id)).all())
+
+
+def _attendance_for_range(db: Session, staff_ids: list[int], start: date, end: date, tz_name: str) -> list[Attendance]:
+    if not staff_ids:
+        return []
+    zone = ZoneInfo(tz_name)
+    lo_local = datetime.combine(start - timedelta(days=1), time.min, tzinfo=zone)
+    hi_local = datetime.combine(end + timedelta(days=2), time.min, tzinfo=zone)
+    lo = lo_local.astimezone(timezone.utc).replace(tzinfo=None)
+    hi = hi_local.astimezone(timezone.utc).replace(tzinfo=None)
+    return list(db.scalars(
+        select(Attendance)
+        .where(Attendance.staff_id.in_(staff_ids), Attendance.timestamp >= lo, Attendance.timestamp < hi)
+        .order_by(Attendance.staff_id, Attendance.timestamp, Attendance.id)
+    ).all())
+
+
+def _compute_arrival(clock_in_local: datetime | None, sh, early_arrival_minutes: int):
+    if clock_in_local is None or sh is None:
+        return None, None
+    start = sh.start.replace(tzinfo=None)
+    ts = clock_in_local.replace(tzinfo=None)
+    mins = int((ts - start).total_seconds() // 60)  # floor minutes vs start (negative = early)
+    early_thr = start - timedelta(minutes=int(early_arrival_minutes))
+    grace_end = start + timedelta(minutes=int(sh.grace))
+    if ts <= early_thr:
+        status = "early"
+    elif ts > grace_end:
+        status = "late"
+    else:
+        status = "on_time"
+    return status, mins
+
+
+def _compute_departure(clock_out_local: datetime | None, sh, late_clockout_minutes: int):
+    if clock_out_local is None or sh is None:
+        return None, None
+    end = sh.end.replace(tzinfo=None)
+    ts = clock_out_local.replace(tzinfo=None)
+    mins = int((ts - end).total_seconds() // 60)  # minutes vs end (negative = early)
+    late_thr = end + timedelta(minutes=int(late_clockout_minutes))
+    if ts < end:
+        status = "early_departure"
+    elif ts >= late_thr:
+        status = "late_clock_out"
+    else:
+        status = "on_time"
+    return status, mins
+
+
+def _pair_sessions(rows: list[Attendance], zone: ZoneInfo):
+    # Group events per (person, shift-date). Clock-outs created by the lifecycle
+    # service carry ``paired_in_id``; use it first so a later clock-in can never
+    # steal an earlier session's clock-out. Legacy rows fall back to ordering.
+    by_key: dict[tuple[int, date], list[Attendance]] = defaultdict(list)
+    for r in rows:
+        sd = getattr(r, "shift_date", None)
+        if sd is None:
+            sd = _local_dt(r.timestamp, zone).date()
+        by_key[(r.staff_id, sd)].append(r)
+    sessions = []
+    for (sid, sd), ev in by_key.items():
+        evs = [r for r in sorted(ev, key=lambda x: (x.timestamp, x.id)) if not _is_undone(r)]
+        paired_outs: dict[int, Attendance] = {}
+        for r in evs:
+            if r.type == "out" and getattr(r, "paired_in_id", None):
+                paired_outs.setdefault(r.paired_in_id, r)
+        used_out_ids: set[int] = set()
+        for in_r in [r for r in evs if r.type == "in" and not _is_missing(r)]:
+            out_r = paired_outs.get(in_r.id)
+            if out_r is None:
+                for cand in evs:
+                    if (
+                        cand.type == "out"
+                        and cand.id not in used_out_ids
+                        and cand.timestamp >= in_r.timestamp
+                        and not getattr(cand, "paired_in_id", None)
+                    ):
+                        out_r = cand
+                        break
+            if out_r is not None:
+                used_out_ids.add(out_r.id)
+            sessions.append((sid, sd, in_r, out_r))
+        # Any clock-out that does not close an in-session is an orphan.
+        for r in evs:
+            if r.type == "out" and r.id not in used_out_ids:
+                sessions.append((sid, sd, None, r))
+    return sessions
+
+
+def _session_record(sid, sd, in_r, out_r, staff, sh, pnames, zone, early_arrival_minutes, late_clockout_minutes):
+    cin = _to_local_naive(in_r.timestamp, zone) if in_r else None
+    cout = _to_local_naive(out_r.timestamp, zone) if out_r else None
+    # orphan out
+    orphan = in_r is None and out_r is not None
+    missing = (in_r is not None and out_r is not None and getattr(out_r, "flag", None) == "missing_clock_out")
+    in_progress = (in_r is not None and out_r is None)
+    state_tags = []
+    if in_progress:
+        state_tags.append("in_progress")
+    if missing:
+        state_tags.append("missing_clock_out")
+    if orphan:
+        state_tags.append("orphan_out")
+
+    # arrival/departure: read-time; no-shift -> null; also orphan has no arrival
+    arr_status = arr_mins = dep_status = dep_mins = None
+    if sh is not None and not orphan and in_r is not None:
+        arr_status, arr_mins = _compute_arrival(cin, sh, early_arrival_minutes)
+    if sh is not None and out_r is not None and not missing:
+        dep_status, dep_mins = _compute_departure(cout, sh, late_clockout_minutes)
+    # if out is missing_clock_out auto-close, still no departure status (not a real clock-out)
+
+    # duration minus break, completed pairs only (exclude missing auto-close)
+    duration = None
+    if in_r is not None and out_r is not None and not missing and cin and cout:
+        secs = (cout - cin).total_seconds()
+        if secs >= 0:
+            br = int(sh.break_min) if sh is not None else 0
+            duration = int(max(0, secs - br * 60) // 60)
+
+    evs = [r for r in (in_r, out_r) if r is not None]
+    edited = any(getattr(r, "edited_by", None) is not None for r in evs)
+    reason = next((getattr(r, "edit_reason", None) for r in evs if getattr(r, "edit_reason", None)), None)
+    method = in_r.method if in_r is not None else (out_r.method if out_r else None)
+    approved = any(getattr(r, "approved_by", None) is not None for r in evs)
+
+    record_tags = []
+    if method == "manual":
+        record_tags.append("manual")
+    if edited:
+        record_tags.append("edited")
+    if approved:
+        record_tags.append("approved_request")
+
+    shift_name = pnames.get(getattr(sh, "pattern_id", None) or getattr(sh, "shift_id", None) or (getattr(in_r, "shift_id", None) if in_r else getattr(out_r, "shift_id", None))) if sh else None
+    # resolve pattern name via shift_id on events as fallback
+    sid_for_name = (getattr(in_r, "shift_id", None) if in_r else None) or (getattr(out_r, "shift_id", None) if out_r else None)
+    if not shift_name and sid_for_name:
+        shift_name = pnames.get(int(sid_for_name))
+
+    return {
+        "staff_id": staff.id, "name": staff.name, "staff_code": staff.staff_code, "department": staff.department,
+        "shift_date": sd.isoformat() if sd else None,
+        "shift_name": shift_name,
+        "shift_start": _iso_local(sh.start.replace(tzinfo=None) if sh else None),
+        "shift_end": _iso_local(sh.end.replace(tzinfo=None) if sh else None),
+        "clock_in": _iso_local(cin), "clock_in_display": _disp(cin),
+        "clock_out": _iso_local(cout), "clock_out_display": _disp(cout),
+        "duration_minutes": duration,
+        "arrival_status": arr_status, "minutes_vs_start": arr_mins,
+        "departure_status": dep_status, "minutes_vs_end": dep_mins,
+        "state_tags": state_tags,
+        "edited": edited, "reason": reason, "method": method,
+        "record_tags": record_tags,
+        "event_ids": [r.id for r in evs],
+    }
+
+
+def _matches_filters(rec, arrival, departure, session_f, record_f, arrival_min, departure_min):
+    # AND across groups, OR within group. No filter in a group => that group passes.
+    if arrival:
+        if rec["arrival_status"] is None or rec["arrival_status"] not in set(arrival):
+            return False
+    if departure:
+        if rec["departure_status"] is None or rec["departure_status"] not in set(departure):
+            return False
+    if session_f:
+        if not (set(rec["state_tags"]) & set(session_f)):
+            return False
+    if record_f:
+        if not (set(rec["record_tags"]) & set(record_f)):
+            return False
+    if arrival_min is not None:
+        st = rec["arrival_status"]; mv = rec["minutes_vs_start"]
+        if st is None or mv is None:
+            return False
+        if st == "early":
+            ok = (-mv) >= int(arrival_min)
+        elif st == "late":
+            ok = mv >= int(arrival_min)
+        else:
+            return False
+        if not ok:
+            return False
+    if departure_min is not None:
+        st = rec["departure_status"]; mv = rec["minutes_vs_end"]
+        if st is None or mv is None:
+            return False
+        if st == "early_departure":
+            ok = (-mv) >= int(departure_min)
+        elif st == "late_clock_out":
+            ok = mv >= int(departure_min)
+        else:
+            return False
+        if not ok:
+            return False
+    return True
+
+
+def _day_summary(recs):
+    c = defaultdict(int)
+    for r in recs:
+        if r.get("arrival_status"): c[f"arrival:{r['arrival_status']}"] += 1
+        if r.get("departure_status"): c[f"departure:{r['departure_status']}"] += 1
+        for t in r.get("state_tags") or []: c[f"session:{t}"] += 1
+        for t in r.get("record_tags") or []: c[f"record:{t}"] += 1
+    return dict(c)
+
+
+def _build_sessions(db: Session, admin: Admin, from_d, to_d, department, staff_id, search, method,
+                    days_per_page, page, arrival, departure, session_f, record_f, arrival_min, departure_min):
+    if from_d is None or to_d is None:
+        raise HTTPException(status_code=422, detail="from and to are required")
+    if to_d < from_d:
+        raise HTTPException(status_code=422, detail="to must be on or after from")
+    if (to_d - from_d).days > 61:
+        raise HTTPException(status_code=422, detail="date range exceeds 62 days")
+    days_per_page = max(1, min(int(days_per_page or 7), 62))
+    page = max(1, int(page or 1))
+
+    settings = get_all(db)
+    tz_name = get_settings().timezone
+    early_thr = int(settings.get("early_arrival_minutes", 15) or 15)
+    late_out_thr = int(settings.get("late_clockout_minutes", 15) or 15)
+    zone = ZoneInfo(tz_name)
+
+    all_days = []
+    cur = from_d
+    while cur <= to_d:
+        all_days.append(cur)
+        cur += timedelta(days=1)
+    total_days = len(all_days)
+    start_i = (page - 1) * days_per_page
+    page_days = all_days[start_i:start_i + days_per_page]
+    page_from = page_days[0] if page_days else from_d
+    page_to = page_days[-1] if page_days else to_d
+
+    # constant query set: staff, settings(already), shifts data for scoped staff over page range, attendance over page range, pattern names
+    people = _scoped_staff_sessions(db, admin, department, staff_id, search)
+    ids = [s.id for s in people]
+    staff_by = {s.id: s for s in people}
+    data = _shifts_data_for(db, ids, page_from, page_to)
+    pnames = _pattern_name_map(db)
+    att_rows = _attendance_for_range(db, ids, page_from, page_to, tz_name)
+    # method filter applied post-pairing via record/session context below? keep broad load; filter on session
+    _method_filter = method
+
+    paired = _pair_sessions(att_rows, zone)
+    recs = []
+    for sid, sd, in_r, out_r in paired:
+        stf = staff_by.get(sid)
+        if stf is None:
+            continue
+        sh = _resolve_for(db, sid, sd, data)
+        rec = _session_record(sid, sd, in_r, out_r, stf, sh, pnames, zone, early_thr, late_out_thr)
+        if _method_filter and not any(getattr(rr, "method", None) == _method_filter for rr in (in_r, out_r) if rr):
+            continue
+        if _matches_filters(rec, arrival, departure, session_f, record_f, arrival_min, departure_min):
+            recs.append(rec)
+
+    # group by day (paginate by day)
+    by_day = defaultdict(list)
+    for r in recs:
+        by_day[r["shift_date"]].append(r)
+    days_out = []
+    for d in page_days:
+        dk = d.isoformat()
+        dr = sorted(by_day.get(dk, []), key=lambda x: (x["staff_id"], x["clock_in"] or "", x["event_ids"][0] if x["event_ids"] else 0))
+        days_out.append({"date": dk, "summary": _day_summary(dr), "sessions": dr})
+
+    return {
+        "from": from_d.isoformat(), "to": to_d.isoformat(),
+        "timezone": tz_name,
+        "page": page, "days_per_page": days_per_page, "total_days": total_days,
+        "early_arrival_minutes": early_thr, "late_clockout_minutes": late_out_thr,
+        "filters": {"arrival": arrival, "departure": departure, "session": session_f, "record": record_f,
+                    "arrival_min_minutes": arrival_min, "departure_min_minutes": departure_min,
+                    "department": department, "staff_id": staff_id, "search": search, "method": method},
+        "days": days_out,
+    }
+
+
+@router.get("/sessions")
+def list_sessions(
+    request: Request,
+    from_d: date = Query(..., alias="from"),
+    to_d: date = Query(..., alias="to"),
+    department: str | None = None,
+    staff_id: int | None = None,
+    search: str | None = None,
+    method: str | None = None,
+    days_per_page: int = Query(7, ge=1, le=62),
+    page: int = Query(1, ge=1),
+    arrival_min_minutes: int | None = Query(None, ge=0),
+    departure_min_minutes: int | None = Query(None, ge=0),
+    admin: Admin = Depends(require_role(ROLE_ADMIN, ROLE_MANAGER)),
+    db: Session = Depends(get_session),
+):
+    arrival = _repeat(request.query_params, "arrival")
+    departure = _repeat(request.query_params, "departure")
+    session_f = _repeat(request.query_params, "session")
+    record_f = _repeat(request.query_params, "record")
+    return _build_sessions(db, admin, from_d, to_d, department, staff_id, search, method,
+                           days_per_page, page, arrival, departure, session_f, record_f,
+                           arrival_min_minutes, departure_min_minutes)
+
+
+@router.get("/sessions.csv")
+def sessions_csv(
+    request: Request,
+    from_d: date = Query(..., alias="from"),
+    to_d: date = Query(..., alias="to"),
+    department: str | None = None,
+    staff_id: int | None = None,
+    search: str | None = None,
+    method: str | None = None,
+    arrival_min_minutes: int | None = Query(None, ge=0),
+    departure_min_minutes: int | None = Query(None, ge=0),
+    admin: Admin = Depends(require_role(ROLE_ADMIN, ROLE_MANAGER)),
+    db: Session = Depends(get_session),
+):
+    arrival = _repeat(request.query_params, "arrival")
+    departure = _repeat(request.query_params, "departure")
+    session_f = _repeat(request.query_params, "session")
+    record_f = _repeat(request.query_params, "record")
+    # CSV exports all days in range (no day pagination) but still capped at 62
+    payload = _build_sessions(db, admin, from_d, to_d, department, staff_id, search, method,
+                              days_per_page=62, page=1, arrival=arrival, departure=departure,
+                              session_f=session_f, record_f=record_f,
+                              arrival_min=arrival_min_minutes, departure_min=departure_min_minutes)
+    headers = [
+        "shift_date","staff_id","staff_code","name","department","shift_name","shift_start","shift_end",
+        "clock_in","clock_out","duration_minutes","arrival_status","minutes_vs_start",
+        "departure_status","minutes_vs_end","state_tags","edited","reason","method","event_ids",
+    ]
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(headers)
+    for day in payload["days"]:
+        for s in day["sessions"]:
+            w.writerow([
+                s.get("shift_date"), s.get("staff_id"), s.get("staff_code") or "", s.get("name") or "",
+                s.get("department") or "", s.get("shift_name") or "", s.get("shift_start") or "", s.get("shift_end") or "",
+                s.get("clock_in") or "", s.get("clock_out") or "",
+                (s.get("duration_minutes") if s.get("duration_minutes") is not None else ""),
+                s.get("arrival_status") or "", (s.get("minutes_vs_start") if s.get("minutes_vs_start") is not None else ""),
+                s.get("departure_status") or "", (s.get("minutes_vs_end") if s.get("minutes_vs_end") is not None else ""),
+                "|".join(s.get("state_tags") or []), "yes" if s.get("edited") else "no",
+                s.get("reason") or "", s.get("method") or "", "|".join(str(i) for i in (s.get("event_ids") or [])),
+            ])
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="sessions-{payload["from"]}-to-{payload["to"]}.csv"'})

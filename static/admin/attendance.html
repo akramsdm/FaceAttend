@@ -31,25 +31,70 @@
     <main id="main" class="page">
       <div class="page-head">
         <div>
-          <h1>Attendance</h1>
-          <p>Filter records, add or correct entries (a reason is required and recorded), and export CSV.</p>
+          <h1>Attendance sessions</h1>
+          <p>Shift-aware sessions (paired clock-in/out) with arrival/departure status. Uses server display times in the configured timezone. Manual records and corrections still require a reason (audit log).</p>
+        </div>
+        <div class="button-row">
+          <button id="add-record" class="button" type="button">Add manual record</button>
+          <button id="export-csv" class="button secondary" type="button">Download CSV (active filters)</button>
+          <button id="monthly" class="button secondary" type="button">Download monthly report CSV</button>
         </div>
       </div>
       <p id="message" class="message" role="status" aria-live="polite"></p>
 
       <section class="panel" aria-labelledby="filters-title">
-        <h2 id="filters-title">Filters and export</h2>
-        <form id="filters-form" class="toolbar">
-          <div class="field"><label for="start">Start date</label><input id="start" name="start" type="date" /></div>
-          <div class="field"><label for="end">End date</label><input id="end" name="end" type="date" /></div>
-          <div class="field"><label for="staff-id">Staff ID (optional)</label><input id="staff-id" name="staff_id" type="number" min="1" inputmode="numeric" /></div>
-          <div class="field"><label for="department">Department (optional)</label><input id="department" name="department" type="text" /></div>
-          <div class="button-row">
-            <button class="button" type="submit">Apply filters</button>
-            <button id="export" class="button secondary" type="button">Download export CSV</button>
-            <button id="monthly" class="button secondary" type="button">Download monthly report CSV</button>
+        <h2 id="filters-title">Filters</h2>
+        <form id="filters-form" novalidate>
+          <div class="sess-toolbar">
+            <div class="field" style="margin:0"><span class="label">Date range</span>
+              <div class="sess-presets" role="group" aria-label="Date presets">
+                <button type="button" class="button secondary" data-preset="today">Today</button>
+                <button type="button" class="button secondary" data-preset="week">This week</button>
+                <button type="button" class="button secondary" data-preset="last7">Last 7 days</button>
+                <button type="button" class="button secondary" data-preset="custom">Custom</button>
+              </div>
+            </div>
+            <div class="field" style="margin:0"><label for="from">From</label><input id="from" name="from" type="date" required /></div>
+            <div class="field" style="margin:0"><label for="to">To</label><input id="to" name="to" type="date" required /></div>
+            <div class="field" style="margin:0"><label for="department">Department</label><input id="department" name="department" type="text" autocomplete="off" /></div>
+            <div class="field" style="margin:0"><label for="search">Person search (name or code)</label><input id="search" name="search" type="text" autocomplete="off" /></div>
+            <div class="field" style="margin:0"><label for="method">Method</label>
+              <select id="method" name="method"><option value="">Any</option><option value="face">Face</option><option value="manual">Manual</option><option value="review">Review</option></select>
+            </div>
+            <div class="field" style="margin:0"><label for="days_per_page">Days per page</label>
+              <select id="days_per_page" name="days_per_page"><option value="7" selected>7</option><option value="1">1</option><option value="14">14</option><option value="31">31</option></select>
+            </div>
+            <div class="button-row" style="margin:0"><button class="button" type="submit">Apply filters</button></div>
+          </div>
+
+          <p class="help" id="filter-hint">Within a group: any of them. Across groups: all of them.</p>
+          <div class="fg-row" role="group" aria-describedby="filter-hint">
+            <fieldset class="filter-group"><legend>Arrival</legend>
+              <label><input type="checkbox" name="arrival" value="early" /> Early</label>
+              <label><input type="checkbox" name="arrival" value="on_time" /> On time</label>
+              <label><input type="checkbox" name="arrival" value="late" /> Late</label>
+              <div class="minmin"><label for="arrival_min">At least</label><input id="arrival_min" name="arrival_min_minutes" type="number" min="0" step="1" inputmode="numeric" /><span>min</span></div>
+            </fieldset>
+            <fieldset class="filter-group"><legend>Departure</legend>
+              <label><input type="checkbox" name="departure" value="early_departure" /> Early departure</label>
+              <label><input type="checkbox" name="departure" value="on_time" /> On time</label>
+              <label><input type="checkbox" name="departure" value="late_clock_out" /> Late clock-out</label>
+              <div class="minmin"><label for="departure_min">At least</label><input id="departure_min" name="departure_min_minutes" type="number" min="0" step="1" inputmode="numeric" /><span>min</span></div>
+            </fieldset>
+            <fieldset class="filter-group"><legend>Session</legend>
+              <label><input type="checkbox" name="session" value="in_progress" /> In progress</label>
+              <label><input type="checkbox" name="session" value="missing_clock_out" /> Missing clock-out</label>
+              <label><input type="checkbox" name="session" value="orphan_out" /> Out without in</label>
+            </fieldset>
+            <fieldset class="filter-group"><legend>Record</legend>
+              <label><input type="checkbox" name="record" value="manual" /> Manual</label>
+              <label><input type="checkbox" name="record" value="edited" /> Edited</label>
+              <label><input type="checkbox" name="record" value="approved_request" /> Approved request</label>
+            </fieldset>
           </div>
         </form>
+        <div id="chips" class="chips" aria-label="Active filters"></div>
+        <p id="match-count" class="match-count" aria-live="polite"></p>
       </section>
 
       <section id="editor" class="panel" aria-labelledby="editor-title" hidden>
@@ -69,22 +114,17 @@
         </form>
       </section>
 
-      <section class="panel" aria-labelledby="table-title">
-        <div class="page-head">
-          <h2 id="table-title">Records</h2>
-          <button id="add-record" class="button" type="button">Add manual record</button>
-        </div>
-        <p id="count" class="muted small" aria-live="polite">Loading…</p>
-        <div class="table-wrap">
-          <table>
-            <caption>Attendance records (local times shown).</caption>
-            <thead><tr><th scope="col">ID</th><th scope="col">Staff</th><th scope="col">Department</th><th scope="col">Type</th><th scope="col">Local time</th><th scope="col">Method</th><th scope="col">Edited by</th><th scope="col">Reason</th><th scope="col">Actions</th></tr></thead>
-            <tbody id="rows"><tr><td colspan="9">Loading…</td></tr></tbody>
-          </table>
-        </div>
+      <section aria-labelledby="results-title">
+        <h2 id="results-title" class="visually-hidden">Session results</h2>
+        <div id="days" aria-live="polite"></div>
+        <nav class="button-row" aria-label="Pagination" id="pager" hidden>
+          <button id="prev-page" class="button secondary" type="button">Previous days</button>
+          <span id="page-info" class="muted"></span>
+          <button id="next-page" class="button secondary" type="button">Next days</button>
+        </nav>
       </section>
     </main>
     <script src="js/common.js"></script>
-    <script src="js/attendance.js"></script>
+    <script src="js/attendance.js?v=sessions2"></script>
   </body>
 </html>

@@ -185,3 +185,19 @@ def test_late_flag_at_exact_boundary(
     row = list(csv.DictReader(io.StringIO(r.text)))[0]
     assert row["late_arrivals"] == "1"
     get_settings.cache_clear()
+
+
+def test_attendance_timestamps_serialise_as_explicit_utc(
+    authenticated_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    s1 = add_staff(session_factory)
+    # Stored naive UTC (what the DB actually holds).
+    add_attendance(session_factory, s1, "in", datetime(2026, 1, 10, 8, 0, 0))
+
+    r = authenticated_client.get("/api/admin/attendance", params={"staff_id": s1})
+    assert r.status_code == 200
+    row = r.json()[0]
+    # Never a bare naive value: explicit Z for UTC.
+    assert row["timestamp"] == "2026-01-10T08:00:00Z"
+    # local_time is offset-aware (configured TIMEZONE, UTC in tests).
+    assert row["local_time"].endswith("+00:00") or row["local_time"].endswith("Z")
