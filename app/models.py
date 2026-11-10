@@ -133,6 +133,15 @@ class Attendance(Base):
     flag: Mapped[str | None] = mapped_column(String(30))
     approved_by: Mapped[int | None] = mapped_column(ForeignKey("admins.id"), index=True)
     undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Lifecycle integrity (Phase 4):
+    # - token_jti: idempotency key for kiosk clock requests (one row per token)
+    # - paired_in_id: links a clock-out to the exact clock-in it closes
+    # - open_key: unique while an 'in' row is open; cleared when the session closes
+    token_jti: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    paired_in_id: Mapped[int | None] = mapped_column(
+        ForeignKey("attendance.id"), index=True
+    )
+    open_key: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
 
     staff: Mapped[Staff] = relationship(back_populates="attendance")
     editor: Mapped[Admin | None] = relationship(foreign_keys=[edited_by])

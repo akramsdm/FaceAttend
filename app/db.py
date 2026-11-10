@@ -71,9 +71,23 @@ def _migrate_sqlite(conn) -> None:
             ("flag", "ALTER TABLE attendance ADD COLUMN flag VARCHAR(30)"),
             ("approved_by", "ALTER TABLE attendance ADD COLUMN approved_by INTEGER REFERENCES admins(id)"),
             ("undone_at", "ALTER TABLE attendance ADD COLUMN undone_at DATETIME"),
+            ("token_jti", "ALTER TABLE attendance ADD COLUMN token_jti VARCHAR(64)"),
+            ("paired_in_id", "ALTER TABLE attendance ADD COLUMN paired_in_id INTEGER REFERENCES attendance(id)"),
+            ("open_key", "ALTER TABLE attendance ADD COLUMN open_key VARCHAR(64)"),
         ]:
             if col not in at:
                 conn.exec_driver_sql(ddl)
+        # Integrity indexes. Existing rows keep NULL values (never rewritten), and
+        # SQLite permits many NULLs in a UNIQUE index.
+        conn.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_token_jti ON attendance(token_jti)"
+        )
+        conn.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_open_key ON attendance(open_key)"
+        )
+        conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS ix_attendance_paired_in_id ON attendance(paired_in_id)"
+        )
 
     if "patterns" in tables:
         pc = _cols("patterns")
