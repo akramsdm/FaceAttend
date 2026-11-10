@@ -42,6 +42,23 @@ def to_local_time(naive_utc: datetime, timezone_name: str) -> datetime:
     )
 
 
+def iso_utc(value: datetime | None) -> str | None:
+    """Serialize a stored (naive UTC) or aware datetime as explicit UTC ISO-8601.
+
+    Database values are naive UTC. A bare naive ISO string is ambiguous, so we
+    always emit ``Z``; aware values are converted to UTC first rather than
+    having ``Z`` appended to a non-UTC value.
+    """
+
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def attendance_within_cooldown(
     session: Session,
     staff_id: int,

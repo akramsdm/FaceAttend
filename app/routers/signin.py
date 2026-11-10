@@ -1,8 +1,7 @@
 """Public kiosk sign-in/scan endpoints."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
@@ -10,15 +9,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import rules, signin
+from app import attendance_service, rules, signin
+from app.attendance_service import close_open_session, record_event, state_for_staff
 from app.clock_tokens import TOKEN_TTL_SECONDS, issue_clock_token
 from app.config import get_settings
 from app.db import get_session
-from app.models import Assignment, Attendance, ClockToken, Pattern, PatternDay, ShiftException, Staff, utcnow
+from app.models import Attendance, Staff, utcnow
 from app.recognition import GalleryCache, Recognizer
-from app.routers.shifts import _shifts_data
 from app.settings_store import get_value
-from app.shifts import evaluate, resolve_shift, shift_date_for
 from app.spoof import confirm_head_turn
 
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
@@ -41,8 +39,12 @@ class ScanResponse(BaseModel):
     shift_summary: str | None = None
     shift_start: str | None = None
     shift_end: str | None = None
+    next_shift_summary: str | None = None
+    next_shift_start: str | None = None
+    next_shift_end: str | None = None
     allowed_actions: list[str] = []
     message: str | None = None
+    state: str | None = None
     token: str | None = None
     token_expires_in: int | None = None
     challenge: Literal["left", "right"] | None = None
@@ -81,51 +83,20 @@ def _eligible_staff(db: Session, staff_id: int | None) -> Staff | None:
     return staff
 
 
-def _iso(dt: datetime) -> str:
-    return dt.isoformat().replace("+00:00", "Z")
+def _iso_local(dt: datetime | None) -> str | None:
+    """Shift start/end are naive local wall-clock values; never tag them Z."""
+    return dt.replace(tzinfo=None).isoformat(timespec="seconds") if dt else None
 
 
-def _local_now(now: datetime, timezone_name: str) -> datetime:
-    from datetime import timezone as _tz
-    return now.replace(tzinfo=_tz.utc).astimezone(ZoneInfo(timezone_name)).replace(tzinfo=None)
-
-
-def _has_open_clockin(db: Session, staff_id: int, local_now: datetime) -> bool:
-    # open if latest non-undone attendance today-ish is 'in'? conservative: any in without out after.
-    # limit lookback to 2 days to cover night shift.
-    cutoff = local_now - timedelta(days=2)
-    rows = db.scalars(
-        select(Attendance)
-        .where(Attendance.staff_id == staff_id, Attendance.undone_at.is_(None),
-               Attendance.timestamp >= cutoff)
-        .order_by(Attendance.timestamp.desc(), Attendance.id.desc())
-    ).all()
-    for r in rows:
-        if r.type == "in":
-            return True
-        if r.type == "out":
-            return False
-    return False
-
-
-def _resolve_today(db: Session, staff_id: int, local_now: datetime):
-    data = _shifts_data(db)
-    today = local_now.date()
-    candidates = []
-    for d in (today, today - timedelta(days=1)):
-        sh = resolve_shift(staff_id, d, data)
-        if sh is None:
-            continue
-        # keep if local_now falls within plausible window or it's the start-day shift
-        if d == today or (sh.overnight and local_now <= sh.end):
-            candidates.append(sh)
-    if not candidates:
+def _iso_utc(dt: datetime | None) -> str | None:
+    """Serialise a stored naive-UTC datetime with an explicit ``Z`` suffix."""
+    if dt is None:
         return None
-    # prefer one containing now (window-aware handled by evaluate); else first
-    for sh in candidates:
-        if sh.start - timedelta(minutes=sh.early_window) <= local_now <= sh.end + timedelta(hours=4):
-            return sh
-    return candidates[0]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _shift_summary(sh) -> str | None:
@@ -134,6 +105,15 @@ def _shift_summary(sh) -> str | None:
     def hm(dt):
         return dt.strftime("%H:%M")
     return f"{hm(sh.start)}–{hm(sh.end)}{' (overnight)' if sh.overnight else ''}"
+
+
+def _next_shift_summary(sh) -> str | None:
+    if sh is None:
+        return None
+    return (
+        f"{sh.start.strftime('%a %d %b %H:%M')}–{sh.end.strftime('%H:%M')}"
+        f"{' (overnight)' if sh.overnight else ''}"
+    )
 
 
 def _recognise(image_bytes: bytes, *, kiosk: str, db: Session, recognizer: Recognizer,
@@ -236,18 +216,29 @@ def scan_face(
     # matched: log attempt, issue token + shift/evaluate (no attendance row recorded here)
     signin.record_attempt(db, kiosk_id=kiosk, outcome="matched", now=now,
                           best_staff_id=staff.id, score=best_score)
-    local_now = _local_now(now, settings.timezone)
-    sh = _resolve_today(db, staff.id, local_now)
-    open_session = _has_open_clockin(db, staff.id, local_now)
-    ev = evaluate(local_now, sh, open_session, margin_overtime=0)
+    # The backend is the single source of truth for what is allowed now.
+    state = state_for_staff(db, staff, now)
+    shift = state["shift"]
+    next_shift = state.get("next_shift")
+    evaluation = state["evaluation"]
     token, _row = issue_clock_token(db, staff_id=staff.id, kiosk_id=kiosk, now=now, ttl_seconds=TOKEN_TTL_SECONDS)
     db.commit()
-    return ScanResponse(status="ok", name=staff.name, department=staff.department,
-                        shift_summary=_shift_summary(sh),
-                        shift_start=_iso(sh.start) if sh is not None else None,
-                        shift_end=_iso(sh.end) if sh is not None else None,
-                        allowed_actions=list(ev.get("allowed_actions") or []),
-                        message=ev.get("message"), token=token, token_expires_in=TOKEN_TTL_SECONDS)
+    return ScanResponse(
+        status="ok",
+        name=staff.name,
+        department=staff.department,
+        shift_summary=_shift_summary(shift),
+        shift_start=_iso_local(shift.start) if shift is not None else None,
+        shift_end=_iso_local(shift.end) if shift is not None else None,
+        next_shift_summary=_next_shift_summary(next_shift),
+        next_shift_start=_iso_local(next_shift.start) if next_shift is not None else None,
+        next_shift_end=_iso_local(next_shift.end) if next_shift is not None else None,
+        allowed_actions=list(evaluation.get("allowed_actions") or []),
+        message=evaluation.get("message"),
+        state=state["state"],
+        token=token,
+        token_expires_in=TOKEN_TTL_SECONDS,
+    )
 
 
 # --- legacy /api/signin kept working for existing tests (step 8 in/out behavior) ---
@@ -291,12 +282,75 @@ def sign_in(
     if recent is not None:
         signin.record_attempt(db, kiosk_id=kiosk, outcome="matched", now=now, best_staff_id=staff.id, score=best_score)
         db.commit()
-        return _resp({"status":"already_recorded","name":staff.name,"action":recent.type,
-                      "time":_iso(signin.to_local_time(recent.timestamp, settings.timezone))})
-    action = signin.next_action(db, staff.id, now, settings.timezone)
-    db.add(Attendance(staff_id=staff.id, type=action, timestamp=now, method="face",
-                      distance=None if best_score is None else 1.0 - best_score,
-                      model_version=getattr(recognizer, "model_version", None)))
+        return _resp({
+            "status": "already_recorded",
+            "name": staff.name,
+            "action": recent.type,
+            "time": _iso_utc(recent.timestamp),
+        })
+
+    # Legacy endpoint: still enforce the lifecycle (no orphan clock-outs, no
+    # duplicate clock-ins, no reopening a completed shift).
+    state = state_for_staff(db, staff, now)
+    if state["open_in"] is not None:
+        flag = (state["evaluation"] or {}).get("flag")
+        att = close_open_session(db, state["open_in"], now_utc=now, flag=flag, method="face")
+        action = "out"
+    else:
+        if state["completed"]:
+            signin.record_attempt(db, kiosk_id=kiosk, outcome="matched", now=now,
+                                  best_staff_id=staff.id, score=best_score)
+            db.commit()
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "status": "blocked",
+                    "name": staff.name,
+                    "action": None,
+                    "time": None,
+                    "code": "shift_already_completed",
+                    "message": "This employee has already completed their shift. Manager approval is required for re-entry.",
+                },
+            )
+        evaluation = state["evaluation"] or {}
+        if (
+            state["shift"] is not None
+            and evaluation.get("message") in ("before_window", "after_shift_end")
+        ):
+            signin.record_attempt(db, kiosk_id=kiosk, outcome="matched", now=now,
+                                  best_staff_id=staff.id, score=best_score)
+            db.commit()
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "status": "blocked",
+                    "name": staff.name,
+                    "action": None,
+                    "time": None,
+                    "code": evaluation.get("message"),
+                    "message": "Clock-in is outside the permitted window. Manager approval is required.",
+                },
+            )
+        shift = state["shift"]
+        att = record_event(
+            db,
+            staff_id=staff.id,
+            action="in",
+            now_utc=now,
+            shift_id=shift.pattern_id if shift is not None else None,
+            shift_date=state["shift_date"],
+            flag=evaluation.get("flag"),
+            method="face",
+        )
+        action = "in"
+
+    att.distance = None if best_score is None else 1.0 - best_score
+    att.model_version = getattr(recognizer, "model_version", None)
     signin.record_attempt(db, kiosk_id=kiosk, outcome="matched", now=now, best_staff_id=staff.id, score=best_score)
     db.commit()
-    return _resp({"status":"ok","name":staff.name,"action":action,"time":_iso(signin.to_local_time(now, settings.timezone))})
+    return _resp({
+        "status": "ok",
+        "name": staff.name,
+        "action": action,
+        "time": _iso_utc(now),
+    })

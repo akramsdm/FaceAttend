@@ -228,21 +228,23 @@ def test_allowed_actions_per_situation(scan_env, session_factory):
 
     # clocked in, before end (12:00): can clock out (early departure confirm)
     with session_factory() as s:
-        s.add(Attendance(staff_id=staff_id, type="in", timestamp=datetime(2026, 1, 5, 8, 0, 0), method="manual"))
+        s.add(Attendance(staff_id=staff_id, type="in", timestamp=datetime(2026, 1, 5, 8, 0, 0),
+                         method="manual", shift_id=office.id, shift_date=datetime(2026,1,5).date()))
         s.commit()
     r = _scan_at(client, None, datetime(2026, 1, 5, 12, 0, 0))
     d = r.json()
     assert d["allowed_actions"] == ["out"]
     assert d["message"] == "clock_out_early_confirm"
 
-    # after clock out (end session) - record out, then after end overtime context: clock out allowed
+    # after clock out (end session) - shift already completed => no actions (manager approval/reentry only)
     with session_factory() as s:
-        s.add(Attendance(staff_id=staff_id, type="out", timestamp=datetime(2026, 1, 5, 17, 0, 0), method="manual"))
+        s.add(Attendance(staff_id=staff_id, type="out", timestamp=datetime(2026, 1, 5, 17, 0, 0), method="manual",
+                         shift_id=office.id, shift_date=datetime(2026,1,5).date()))
         s.commit()
     r = _scan_at(client, None, datetime(2026, 1, 5, 17, 30, 0))
     d = r.json()
-    # not clocked in now; after grace -> late_arrival allowed (per evaluate when not open)
-    assert "in" in d["allowed_actions"]
+    assert d["allowed_actions"] == []
+    assert d["message"] == "shift_already_completed"
 
 
 def test_no_shift_situation(scan_env, session_factory):
