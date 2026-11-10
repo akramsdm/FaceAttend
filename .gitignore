@@ -1,9 +1,15 @@
 .venv/
 *.db
+*.db.bak-*
+attendance.db.*.db
+*.db-journal
+*.db-wal
+*.db-shm
 models/*.onnx
 eval_data/
 eval_results/
 var/
+.kilo/
 
 __pycache__/
 *.py[cod]
